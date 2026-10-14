@@ -1,0 +1,15 @@
+{
+  "name": "mcskill-headless-afk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.15" },
+  "scripts": {
+    "test": "node --test --test-isolation=none",
+    "probe": "node src/cli.js probe",
+    "auth-test": "node src/cli.js auth-test",
+    "forge-test": "node src/cli.js forge-test",
+    "login": "node --max-old-space-size=192 tools/login-and-afk.js",
+    "afk": "node --max-old-space-size=192 src/cli.js afk"
+  }
+}

@@ -1,0 +1,39 @@
+[Unit]
+Description=MCSkill protocol 5 headless AFK client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcskill-afk
+Group=mcskill-afk
+WorkingDirectory=/opt/mcskill-afk
+Environment=MC_SESSION_FILE=/etc/mcskill-afk/session.json
+Environment=NODE_ENV=production
+EnvironmentFile=-/etc/mcskill-afk/config
+ExecStart=/opt/mcskill-afk/runtime/node --max-old-space-size=192 /opt/mcskill-afk/src/cli.js afk
+# Application retries network/restart failures every minute; auth rejections stop.
+Restart=no
+KillSignal=SIGTERM
+TimeoutStopSec=15
+MemoryHigh=256M
+MemoryMax=300M
+CPUQuota=90%
+TasksMax=32
+LimitNOFILE=128
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

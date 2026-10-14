@@ -46,7 +46,7 @@ try {
   process.exitCode = await reconnect(c, () => {
     const conn=new MinecraftConnection(c,session,mods,log);consoleUI.setConnection(conn);return conn.start('afk',stop.signal);
   }, log, stop.signal);
-  if (process.exitCode) console.log('Бот остановлен из-за ошибки. При AUTH_REJECTED запустите файл заново для повторного входа.');
+  if (process.exitCode) consoleUI.writeLine('Бот остановлен. Причина указана в connection_closed выше. Повторный вход в аккаунт нужен только при отказе авторизации.');
 } catch (e) {
   if (stop.signal.aborted) { console.log('Остановлено.'); process.exitCode = 0; }
   else { console.error(messages[e.code] || 'Запуск не выполнен. Нужны Node.js 22.15+ и интерактивная консоль. Подробности: README.md.'); process.exitCode = 1; }

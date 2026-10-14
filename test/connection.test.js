@@ -66,9 +66,9 @@ test('end-to-end encrypted login, FML, Join Game, position and KeepAlive over re
   assert.equal(result.error,undefined);assert.ok(result.reached);assert.ok(result.ready);assert.ok(encrypted);assert.ok(keepAliveReply);assert.ok(movement);assert.equal(result.keepAlives,1);
   assert.deepEqual(incomingChat,['<Mock> hello']);assert.ok(chatSent);assert.ok(dropped);assert.equal(conn.game.inventory.drop,null);assert.equal(conn.game.inventory.slots[9],null);
 });
-test('Login Disconnect is terminal and does not expose server text',async t=>{
+test('generic Login Disconnect is retryable and does not expose server text',async t=>{
   const c=await mock(t,s=>s.once('data',()=>s.end(packet(0,string('{"text":"FAKE_TEST_TOKEN"}')))));
-  const result=await new MinecraftConnection(c,session,[],log).start('auth-test');assert.equal(result.error.code,'SERVER_DISCONNECT');assert.equal(result.error.retryable,false);assert.ok(!result.error.message.includes('TOKEN'));
+  const result=await new MinecraftConnection(c,session,[],log).start('auth-test');assert.equal(result.error.code,'SERVER_LOGIN_RETRY');assert.equal(result.error.retryable,true);assert.ok(!result.error.message.includes('TOKEN'));
 });
 test('server restart Disconnect is retryable over actual TCP',async t=>{
   const c=await mock(t,s=>s.once('data',()=>s.end(packet(0,string('{"text":"Сервер перезагружается"}')))));
@@ -95,6 +95,16 @@ test('reconnect recovers an actual dropped TCP connection',async t=>{
   c.maxAttempts=2;
   const code=await reconnect(c,()=>new MinecraftConnection(c,session,[],log).start('probe'),log,new AbortController().signal,async()=>{});
   assert.equal(code,0);assert.equal(attempts,2);
+});
+test('proxy generic login refusals keep retrying over TCP until backend returns',async t=>{
+  const {reconnect}=await import('../src/reconnect.js');let attempts=0;const delays=[];
+  const c=await mock(t,s=>s.once('data',()=>{
+    attempts++;
+    if(attempts<=3)s.end(packet(0,string('{"text":"Disconnected"}')));
+    else s.write(packet(1,concat(string(''),shortBuffer(Buffer.from([1])),shortBuffer(Buffer.from([1])))));
+  }));
+  const code=await reconnect(c,()=>new MinecraftConnection(c,session,[],log).start('probe'),log,new AbortController().signal,async ms=>delays.push(ms));
+  assert.equal(code,0);assert.equal(attempts,4);assert.deepEqual(delays,[60000,60000,60000]);
 });
 test('network close is retryable; malformed packet does not crash process',async t=>{
   const c=await mock(t,s=>s.once('data',()=>s.end()));

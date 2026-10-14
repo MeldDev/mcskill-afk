@@ -70,7 +70,7 @@ export class MinecraftConnection extends EventEmitter {
     this.lastId = id; this.lastSize = frame.length;
     if ((this.state === 'LOGIN' && id === 0) || (this.state === 'PLAY' && id === 0x40)) {
       // Parse for validity but don't log arbitrary server text, which can echo secrets.
-      const code = disconnectCode(r.str()); r.end(); this.log.event('server_disconnect', { state: this.state, code });
+      const code = disconnectCode(r.str(),this.state); r.end(); this.log.event('server_disconnect', { state: this.state, code });
       throw new ConnectionError(code, code !== 'SERVER_DISCONNECT');
     }
     if (this.state === 'LOGIN') {

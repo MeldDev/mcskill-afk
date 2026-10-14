@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { backoff, reconnect } from '../src/reconnect.js';
 import { config } from '../src/config.js';
+import { disconnectCode } from '../src/disconnect.js';
 const log={event(){}};
 test('default policy is fixed one minute with unlimited retries',()=>{
  const c=config({});assert.equal(c.reconnectMode,'fixed');assert.equal(c.reconnectInterval,60000);assert.equal(c.maxAttempts,-1);
@@ -39,4 +40,23 @@ test('auth rejection never retries; stop aborts backoff',async()=>{
 test('successful reconnection after network failure',async()=>{
  let n=0;const code=await reconnect({maxAttempts:2,reconnectBase:1000,reconnectMax:2000,stableMs:5000},async()=>++n===1?{error:{code:'NETWORK',retryable:true},stableMs:0}:{},log,new AbortController().signal,async()=>{});
  assert.equal(n,2);assert.equal(code,0);
+});
+test('restart -> repeated generic login refusals -> recovery keeps one-minute cycling',async()=>{
+ const c=config({}),delays=[];let attempts=0;
+ const result=await reconnect(c,async()=>{
+  attempts++;
+  if(attempts===1)return{ready:true,stableMs:600000,error:{code:'SERVER_RESTART',retryable:true}};
+  if(attempts<=26)return{ready:false,stableMs:0,error:{code:disconnectCode('Disconnected','LOGIN'),retryable:true}};
+  return{ready:true};
+ },log,new AbortController().signal,async ms=>delays.push(ms));
+ assert.equal(result,0);assert.equal(attempts,27);assert.deepEqual(delays,Array(26).fill(60000));
+});
+test('explicit session rejection still stops after a restart',async()=>{
+ let attempts=0;const delays=[];
+ const code=await reconnect(config({}),async()=>{
+  attempts++;
+  if(attempts===1)return{error:{code:'SERVER_RESTART',retryable:true}};
+  return{error:{code:disconnectCode('Invalid session','LOGIN'),retryable:false}};
+ },log,new AbortController().signal,async ms=>delays.push(ms));
+ assert.equal(code,1);assert.equal(attempts,2);assert.deepEqual(delays,[60000]);
 });

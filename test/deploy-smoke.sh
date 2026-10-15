@@ -28,12 +28,14 @@ bash -n "$ROOT/start.sh"
 bash -n "$ROOT/deploy/install-service.sh"
 bash "$ROOT/install-ubuntu.sh" --help >/dev/null
 bash "$project/start.sh" --help >/dev/null
-for mode in login --session --probe; do
+for mode in login --session --probe --setup --forget; do
   (cd -- "$scratch" && bash "$project/start.sh" "$mode")
   mapfile -t args < "$MCSKILL_TEST_RECORD"
   [[ ${args[0]} == "$project" && ${args[1]} == --max-old-space-size=192 ]]
   if [[ "$mode" == login ]]; then
     [[ ${#args[@]} == 3 && ${args[2]} == "$project/tools/login-and-afk.js" ]]
+  elif [[ "$mode" == --setup || "$mode" == --forget ]]; then
+    [[ ${#args[@]} == 4 && ${args[2]} == "$project/tools/login-and-afk.js" && ${args[3]} == "$mode" ]]
   else
     [[ ${#args[@]} == 4 && ${args[2]} == "$project/src/cli.js" ]]
     if [[ "$mode" == --session ]]; then [[ ${args[3]} == afk ]]; else [[ ${args[3]} == probe ]]; fi
@@ -42,4 +44,4 @@ done
 if bash "$project/start.sh" --invalid >/dev/null 2>&1; then echo 'Invalid option accepted' >&2; exit 1; fi
 if MCSKILL_TEST_VERSION_EXIT=1 bash "$project/start.sh" >/dev/null 2>&1; then echo 'Unsupported Node accepted' >&2; exit 1; fi
 if bash "$ROOT/install-ubuntu.sh" --invalid >/dev/null 2>&1; then echo 'Invalid install option accepted' >&2; exit 1; fi
-printf 'Deployment smoke checks passed: syntax, help, runtime selection, cwd with spaces, login/session/probe modes, invalid options/version.\n'
+printf 'Deployment smoke checks passed: syntax, help, runtime selection, cwd with spaces, login/session/probe/setup/forget modes, invalid options/version.\n'

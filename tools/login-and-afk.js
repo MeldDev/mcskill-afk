@@ -6,6 +6,8 @@ import { MinecraftConnection } from '../src/connection.js';
 import { reconnect } from '../src/reconnect.js';
 import { Logger } from '../src/logger.js';
 import { ConsoleController } from '../src/console.js';
+import { credentialsPath, acquireAccount } from '../src/credentials.js';
+import { passwordConnector } from '../src/password-connection.js';
 
 const stop = new AbortController(), log = new Logger();
 let consoleUI;
@@ -29,25 +31,51 @@ const messages = {
   LOGIN_TIMEOUT:'API лаунчера не ответил вовремя.',
   LOGIN_SERVICE_ERROR:'API лаунчера отклонил запрос. Войдите через официальный лаунчер для диагностики.',
   LOGIN_RESPONSE_INVALID:'Ответ API лаунчера не соответствует проверенному формату.',
-  LOGIN_INPUT_INVALID:'Логин или пароль не заполнены либо слишком длинные.'
+  LOGIN_INPUT_INVALID:'Логин или пароль не заполнены либо слишком длинные.',
+  CREDENTIALS_MISSING:'Нет сохранённых данных. Выполните ./start.sh --setup и ответьте Y.',
+  CREDENTIALS_INVALID:'Файл данных повреждён или имеет небезопасные права. Выполните ./start.sh --setup.',
+  CREDENTIALS_SAVE_FAILED:'Не удалось сохранить приватный файл данных. Проверьте права доступа.'
 };
 try {
-  const c = config(), mods = await modProvider(c);
-  console.log('MCSkill AFK — вход отдельным аккаунтом.');
-  console.log('Пароль скрыт при вводе и не сохраняется. Существующий session.json не используется.');
-  const username = (await prompt('Логин второго аккаунта: ')).trim();
-  let password = await prompt('Пароль: ', true), session;
-  try { session = await passwordLogin(username, password, c.authOrigin, stop.signal); }
-  finally { password = undefined; }
-  console.log('Авторизация принята. Перед подключением закройте игру этого же аккаунта.');
-  await prompt('Нажмите Enter для запуска AFK-бота (Ctrl+C — отмена): ');
-  consoleUI=new ConsoleController({log,stop});
-  // Session stays only in this process. No first-account file or environment token is loaded.
-  process.exitCode = await reconnect(c, () => {
-    const conn=new MinecraftConnection(c,session,mods,log);consoleUI.setConnection(conn);return conn.start('afk',stop.signal);
-  }, log, stop.signal);
-  if (process.exitCode) consoleUI.writeLine('Бот остановлен. Причина указана в connection_closed выше. Повторный вход в аккаунт нужен только при отказе авторизации.');
+  const args = process.argv.slice(2);
+  if (args.some(arg => !['--setup','--service','--forget'].includes(arg)) || args.length > 1) throw new Error('INVALID_ARGUMENT');
+  const service = args.includes('--service'), setup = args.includes('--setup');
+  if (args.includes('--forget')) {
+    const { unlink } = await import('node:fs/promises');
+    await unlink(credentialsPath()).catch(e => { if (e.code !== 'ENOENT') throw e; });
+    console.log('Сохранённые данные удалены.');
+  } else {
+    const c = config(), mods = await modProvider(c);
+    console.log('MCSkill AFK — вход своим аккаунтом. Пароль скрыт при вводе.');
+    const { credentials, initialSession, saved } = await acquireAccount({ authOrigin:c.authOrigin, prompt,
+      login:passwordLogin, signal:stop.signal, setup, service });
+    if (saved) console.log('Данные сохранены вне репозитория. Пароль хранится в открытом виде с ограниченным доступом к файлу.');
+    if (setup) console.log('Настройка завершена. Можно запускать сервис.');
+    else {
+      c.authOrigin = credentials.authOrigin;
+      console.log('Запуск AFK. Этот аккаунт должен быть закрыт в другом клиенте.');
+      consoleUI = new ConsoleController({log,stop});
+      let terminal = false;
+      const connect = passwordConnector({ credentials, initialSession, login:passwordLogin, signal:stop.signal, log,
+        connect:async session => {
+          const conn = new MinecraftConnection(c,session,mods,log);
+          consoleUI.setConnection(conn); return conn.start('afk',stop.signal);
+        } });
+      process.exitCode = await reconnect(c, async () => {
+        const result = await connect();
+        terminal = !!result.error && result.error.retryable !== true && result.error.code !== 'STOPPED';
+        return result;
+      }, log, stop.signal);
+      if (process.exitCode && terminal) process.exitCode = 78;
+      if (process.exitCode) consoleUI.writeLine('Бот остановлен. Причина в connection_closed. Для замены данных: ./start.sh --setup; затем перезапустите сервис.');
+    }
+  }
 } catch (e) {
   if (stop.signal.aborted) { console.log('Остановлено.'); process.exitCode = 0; }
-  else { console.error(messages[e.code] || 'Запуск не выполнен. Нужны Node.js 22.15+ и интерактивная консоль. Подробности: README.md.'); process.exitCode = 1; }
+  else {
+    log.event('startup_failed', {code:e.code || 'INTERNAL'});
+    console.error(messages[e.code] || 'Запуск не выполнен. Подробности: README.md.');
+    process.exitCode = e.code === 'CONFIG' || e.code?.startsWith('CREDENTIALS_') ||
+      (e.code?.startsWith('LOGIN_') && !['LOGIN_NETWORK','LOGIN_TIMEOUT','LOGIN_SERVICE_ERROR'].includes(e.code)) ? 78 : 1;
+  }
 } finally { consoleUI?.close(); }

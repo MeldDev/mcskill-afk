@@ -2,18 +2,21 @@
 Description=MCSkill protocol 5 headless AFK client
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=mcskill-afk
 Group=mcskill-afk
 WorkingDirectory=/opt/mcskill-afk
-Environment=MC_SESSION_FILE=/etc/mcskill-afk/session.json
+Environment=MC_CREDENTIALS_FILE=/etc/mcskill-afk/credentials.json
 Environment=NODE_ENV=production
 EnvironmentFile=-/etc/mcskill-afk/config
-ExecStart=/opt/mcskill-afk/runtime/node --max-old-space-size=192 /opt/mcskill-afk/src/cli.js afk
-# Application retries network/restart failures every minute; auth rejections stop.
-Restart=no
+ExecStart=/opt/mcskill-afk/runtime/node --max-old-space-size=192 /opt/mcskill-afk/tools/login-and-afk.js --service
+# Network failures retry inside the app. Restart crashes; terminal auth/policy errors require attention.
+Restart=on-failure
+RestartSec=60
+RestartPreventExitStatus=78
 KillSignal=SIGTERM
 TimeoutStopSec=15
 MemoryHigh=256M

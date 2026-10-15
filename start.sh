@@ -2,12 +2,12 @@
 set -euo pipefail
 ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 mode=${1:-login}
-if (( $# > 1 )); then printf 'Use: ./start.sh [--tmux|--session|--probe|--help]\n' >&2; exit 1; fi
+if (( $# > 1 )); then printf 'Use: ./start.sh [--tmux|--session|--probe|--setup|--forget|--help]\n' >&2; exit 1; fi
 case "$mode" in
   -h|--help)
-    printf 'Usage: ./start.sh [--tmux|--session|--probe]\n\nDefault: interactive login and hidden password input.\n--tmux: create/attach persistent console, session name mcskill-afk.\n--session: use MC_SESSION_FILE or session.json instead of a password prompt.\n--probe: check Minecraft Encryption Request without credentials.\n'
+    printf 'Usage: ./start.sh [--tmux|--session|--probe|--setup|--forget]\n\nDefault: saved credentials, or interactive login with optional saving.\n--setup: replace saved credentials (hidden password, asks Y/N).\n--forget: delete saved credentials.\n--tmux: create/attach persistent console, session name mcskill-afk.\n--session: use MC_SESSION_FILE or session.json instead of a password prompt.\n--probe: check Minecraft Encryption Request without credentials.\n'
     exit 0 ;;
-  login|--tmux|--session|--probe) ;;
+  login|--tmux|--session|--probe|--setup|--forget) ;;
   *) printf 'Unknown option. Use ./start.sh --help.\n' >&2; exit 1 ;;
 esac
 cd -- "$ROOT"
@@ -27,6 +27,8 @@ if [[ "$mode" == --tmux ]]; then
   fi
   # Multiple arguments are passed directly to tmux; no passwords or shell-built commands.
   exec tmux -u new-session -A -s mcskill-afk -c "$ROOT" "$NODE" --max-old-space-size=192 "$ROOT/tools/login-and-afk.js"
+elif [[ "$mode" == --setup || "$mode" == --forget ]]; then
+  exec "$NODE" --max-old-space-size=192 "$ROOT/tools/login-and-afk.js" "$mode"
 elif [[ "$mode" == --session ]]; then
   exec "$NODE" --max-old-space-size=192 "$ROOT/src/cli.js" afk
 elif [[ "$mode" == --probe ]]; then

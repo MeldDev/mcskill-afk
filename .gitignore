@@ -20,3 +20,7 @@ dist/
 *.tmp
 *.key
 *.pem
+
+# Saved account credentials (default is outside this repository)
+credentials.json
+credentials.*.json

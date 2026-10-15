@@ -90,7 +90,7 @@ bash "$ROOT/test/deploy-smoke.sh"
 chmod +x -- "$ROOT/start.sh" "$ROOT/install-ubuntu.sh"
 if (( service )); then
   printf '\nInstalling optional systemd service...\n'
-  "${privilege[@]}" bash "$ROOT/deploy/install-service.sh"
+  "${privilege[@]}" bash "$ROOT/deploy/install-service.sh" "${MC_CREDENTIALS_FILE:-$HOME/.config/mcskill-afk/credentials.json}"
 fi
 printf '\nInstallation complete.\n  ./start.sh          login + password, chat and manual controls\n  ./start.sh --tmux   keep the interactive bot running after SSH disconnect\n\nInside tmux: Ctrl+B, then D detaches; ./start.sh --tmux reattaches.\n'
 printf 'Optional service setup: bash install-ubuntu.sh --service\n'

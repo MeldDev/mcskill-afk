@@ -43,16 +43,24 @@ export class GameSessionHandler {
         if (!accepted) this.send(0x0f, concat(body.subarray(0, 3), Buffer.from([1]))); return;
       }
       case 0x3f: {
-        const channel = r.str(20); const payload = r.bytes(r.varShort(this.forge.profile === 'mcskill')); r.end();
+        let channel;
+        try { channel = r.str(20); }
+        catch (error) { if (error instanceof ProtocolError) error.message = `Plugin channel: ${error.message}`; throw error; }
+        if (!['FML|HS','REGISTER','UNREGISTER'].includes(channel)) {
+          // The outer Minecraft frame is already bounded and fully consumed.
+          // Opaque mod messages can use patched length formats. Never interpret
+          // their envelope or content when we do not implement that channel.
+          this.unknownPayloads++;
+          if (this.unknownPayloads === 1) this.log.event('unhandled_mod_payload', { bytes:r.remaining });
+          return;
+        }
+        const payload = r.bytes(r.varShort(this.forge.profile === 'mcskill')); r.end();
         if (channel === 'FML|HS') this.forge.handle(payload);
         else if (channel === 'REGISTER' || channel === 'UNREGISTER') {
           // Count only: no unbounded set of server-provided channel names.
           if (payload.length > 32767) throw new ProtocolError('Channel registration limit');
           this.channelCount = payload.toString('utf8').split('\0').length;
           this.log.event('plugin_channels', { channels: this.channelCount });
-        } else {
-          this.unknownPayloads++;
-          if (this.unknownPayloads === 1) this.log.event('unhandled_mod_payload', { bytes: payload.length });
         }
         return;
       }

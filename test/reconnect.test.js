@@ -60,3 +60,14 @@ test('explicit session rejection still stops after a restart',async()=>{
  },log,new AbortController().signal,async ms=>delays.push(ms));
  assert.equal(code,1);assert.equal(attempts,2);assert.deepEqual(delays,[60000]);
 });
+
+test('multi-hour restart, post-world decoding error, and next successful connection keep minute retries',async()=>{
+ let attempts=0;const delays=[];
+ const code=await reconnect(config({}),async()=>{
+  attempts++;
+  if(attempts<=104)return{error:{code:'REMOTE_CLOSED',retryable:true},stableMs:0};
+  if(attempts===105)return{ready:true,stableMs:175,error:{code:'PROTOCOL',retryable:true}};
+  return{ready:true};
+ },log,new AbortController().signal,async ms=>delays.push(ms));
+ assert.equal(code,0);assert.equal(attempts,106);assert.deepEqual(delays,Array(105).fill(60000));
+});

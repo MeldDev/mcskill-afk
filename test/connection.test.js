@@ -16,7 +16,9 @@ async function mock(t, handle) {
   t.after(async()=>{for(const s of sockets)s.destroy();await new Promise(r=>server.close(r));});
   return config({MC_HOST:'127.0.0.1',MC_PORT:String(server.address().port),MC_TIMEOUT_MS:'2000',MC_IDLE_TIMEOUT_MS:'2000',MC_TEST_DURATION_MS:'1000'});
 }
-test('end-to-end encrypted login, FML, Join Game, position and KeepAlive over real TCP',async t=>{
+for (const injectProtocolFailure of [false,true]) test(injectProtocolFailure ?
+  'unknown in-world packet closes encrypted TCP and permits a clean reconnect' :
+  'end-to-end encrypted login, FML, Join Game, position and KeepAlive over real TCP',async t=>{
   const {publicKey,privateKey}=generateKeyPairSync('rsa',{modulusLength:1024});
   const der=publicKey.export({type:'spki',format:'der'}), verify=Buffer.from([1,2,3,4]);
   let joinHash, keepAliveReply=false, movement=false, encrypted=false, serverError, chatSent=false, dropped=false;
@@ -49,7 +51,7 @@ test('end-to-end encrypted login, FML, Join Game, position and KeepAlive over re
           // Large unknown payload and chunk prove world data is bounded/discarded.
           send(0x21,Buffer.alloc(131072));
         }
-      } else if(id===0){assert.equal(r.i32(),909);r.end();keepAliveReply=true;}
+      } else if(id===0){assert.equal(r.i32(),909);r.end();keepAliveReply=true;if(injectProtocolFailure)send(0x60,Buffer.alloc(12299));}
       else if(id===6){movement=true;assert.ok(Math.abs(r.f64())<1e-8);assert.ok(Math.abs(r.f64()-64)<1e-8);}
       else if(id===1){assert.equal(r.str(),'/help');r.end();chatSent=true;}
       else if(id===14){
@@ -60,11 +62,14 @@ test('end-to-end encrypted login, FML, Join Game, position and KeepAlive over re
   });
   const conn=new MinecraftConnection(c,session,[],log,{async join(s,h){assert.equal(s.accessToken,'FAKE_TEST_TOKEN');joinHash=h;}});
   conn.on('chat',s=>incomingChat.push(s));
-  conn.once('ready',()=>{conn.sendChat('/help');conn.game.inventory.startDrop(conn.game.inventory.snapshot());});
+  conn.once('ready',()=>{conn.sendChat('/help');if(!injectProtocolFailure)conn.game.inventory.startDrop(conn.game.inventory.snapshot());});
   const result=await conn.start('forge-test');
   if(serverError)throw serverError;
-  assert.equal(result.error,undefined);assert.ok(result.reached);assert.ok(result.ready);assert.ok(encrypted);assert.ok(keepAliveReply);assert.ok(movement);assert.equal(result.keepAlives,1);
-  assert.deepEqual(incomingChat,['<Mock> hello']);assert.ok(chatSent);assert.ok(dropped);assert.equal(conn.game.inventory.drop,null);assert.equal(conn.game.inventory.slots[9],null);
+  if(injectProtocolFailure){assert.equal(result.error.code,'PROTOCOL');assert.equal(result.error.retryable,true);assert.ok(conn.socket.destroyed);assert.ok(conn.finished);}
+  else {assert.equal(result.error,undefined);assert.ok(result.reached);}
+  assert.ok(result.ready);assert.ok(encrypted);assert.ok(keepAliveReply);assert.ok(movement);assert.equal(result.keepAlives,1);
+  assert.deepEqual(incomingChat,['<Mock> hello']);assert.ok(chatSent);assert.ok(!conn.game.inventory.drop);
+  if(!injectProtocolFailure){assert.ok(dropped);assert.equal(conn.game.inventory.slots[9],null);}
 });
 test('generic Login Disconnect is retryable and does not expose server text',async t=>{
   const c=await mock(t,s=>s.once('data',()=>s.end(packet(0,string('{"text":"FAKE_TEST_TOKEN"}')))));
@@ -76,7 +81,7 @@ test('server restart Disconnect is retryable over actual TCP',async t=>{
 });
 test('Login Success before encryption is rejected',async t=>{
   const c=await mock(t,s=>s.once('data',()=>s.write(packet(2,concat(string(session.uuid),string(session.username))))));
-  const result=await new MinecraftConnection(c,session,[],log).start('auth-test');assert.equal(result.error.code,'PROTOCOL');
+  const result=await new MinecraftConnection(c,session,[],log).start('auth-test');assert.equal(result.error.code,'PROTOCOL');assert.equal(result.error.retryable,false);
 });
 test('abort closes an active TCP socket and clears timers',async t=>{
   let sock, accepted;const ready=new Promise(r=>{accepted=r});

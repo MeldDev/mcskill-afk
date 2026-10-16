@@ -123,7 +123,12 @@ export class MinecraftConnection extends EventEmitter {
   }
   close(error) {
     if (this.closed) return;
-    if (error instanceof ProtocolError) this.log.event('protocol_error', { state: error.message, id: this.lastId, bytes: this.lastSize });
+    if (error instanceof ProtocolError) {
+      // Reconnect from a clean TCP/cipher/framing state after an in-world
+      // decoding failure. Never skip bytes or fabricate support for a packet.
+      error.retryable = this.ready === true;
+      this.log.event('protocol_error', { state: error.message, id: this.lastId, bytes: this.lastSize });
+    }
     this.closed = true; this.failure = error;
     this.abort.abort();
     if (this.socket) this.socket.destroy();

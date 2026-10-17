@@ -87,10 +87,11 @@ export PATH="$node_dir/bin:$PATH"
 printf '\n[3/3] Installing locked dependencies and running tests.\n'
 bash "$ROOT/deploy/install-dependencies.sh"
 bash "$ROOT/test/deploy-smoke.sh"
-chmod +x -- "$ROOT/start.sh" "$ROOT/install-ubuntu.sh"
+chmod +x -- "$ROOT/start.sh" "$ROOT/install-ubuntu.sh" "$ROOT/control.sh"
 if (( service )); then
   printf '\nInstalling optional systemd service...\n'
   "${privilege[@]}" bash "$ROOT/deploy/install-service.sh" "${MC_CREDENTIALS_FILE:-$HOME/.config/mcskill-afk/credentials.json}"
 fi
 printf '\nInstallation complete.\n  ./start.sh          login + password, chat and manual controls\n  ./start.sh --tmux   keep the interactive bot running after SSH disconnect\n\nInside tmux: Ctrl+B, then D detaches; ./start.sh --tmux reattaches.\n'
 printf 'Optional service setup: bash install-ubuntu.sh --service\n'
+printf 'Control a running service: sudo bash control.sh (Ctrl+C detaches; bot keeps running).\n'

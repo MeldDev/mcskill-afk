@@ -19,7 +19,7 @@ export class MinecraftConnection extends EventEmitter {
   }
   start(mode = 'afk', signal) {
     if (this.started) throw new Error('Connection already started'); this.started = true; this.mode = mode;
-    this.lastPacketAt = performance.now();
+    this.lastPacketAt = this.lastTcpAt = performance.now();
     return new Promise(resolve => {
       this.resolve = resolve;
       this.onAbort = () => this.close(new ConnectionError('STOPPED', false));
@@ -28,11 +28,13 @@ export class MinecraftConnection extends EventEmitter {
       signal?.addEventListener('abort', this.onAbort, { once: true });
       this.socket = net.createConnection({ host: this.c.host, port: this.c.port });
       this.socket.setNoDelay(true); this.socket.setTimeout(this.c.idleTimeout);
+      this.socket.setKeepAlive(true,30000);
       this.socket.on('timeout', () => this.close(new ConnectionError('IDLE_TIMEOUT')));
       this.socket.on('error', () => this.close(new ConnectionError('NETWORK')));
       this.socket.on('close', () => this.finish(this.failure || new ConnectionError('REMOTE_CLOSED')));
       this.socket.on('data', b => {
         if (this.closed) return;
+        this.lastTcpAt=performance.now();
         try {
           if (this.authPending) throw new ProtocolError('Server data during pending encryption');
           this.codec.feed(this.crypto ? this.crypto.decrypt.update(b) : b, frame => {
@@ -52,14 +54,23 @@ export class MinecraftConnection extends EventEmitter {
         catch (e) { this.close(e); }
       }, 50);
       this.metrics = setInterval(() => {
-        const m = process.memoryUsage(); this.log.event('metrics', { rssMiB: Math.round(m.rss / 1048576), heapMiB: Math.round(m.heapUsed / 1048576), packets: this.packets, keepAlives: this.game?.keepAlives || 0 });
+        const m = process.memoryUsage(); this.log.event('metrics', { rssMiB: Math.round(m.rss / 1048576), heapMiB: Math.round(m.heapUsed / 1048576), packets: this.packets, keepAlives: this.game?.keepAlives || 0,...this.inboundDiagnostics() });
       }, 60000);
     });
+  }
+  inboundDiagnostics(now=performance.now()) {
+    const elapsed=then=>Number.isFinite(then)?Math.max(0,Math.round(now-then)):0;
+    return {...this.codec.progress(),rxBytes:this.socket?.bytesRead||0,txBytes:this.socket?.bytesWritten||0,
+      inboundIdleMs:elapsed(this.lastPacketAt),tcpIdleMs:elapsed(this.lastTcpAt),
+      socketPaused:this.socket?.isPaused?.()||false,outboundBytes:this.socket?.writableLength||0};
   }
   checkInboundTimeout(now = performance.now()) {
     // net.Socket's inactivity timer is also renewed by outgoing writes.
     // Only complete inbound packets prove that the server is still talking.
     if (!this.closed && now - this.lastPacketAt >= this.c.idleTimeout) {
+      const diagnostics=this.inboundDiagnostics(now);
+      const state=diagnostics.socketPaused?'SOCKET_PAUSED':diagnostics.pendingFrameBytes?'WAITING_FRAME':diagnostics.pendingHeaderBytes?'WAITING_HEADER':'NO_COMPLETE_PACKETS';
+      this.log.event('inbound_stalled',{state,id:this.lastId??-1,packets:this.packets,keepAlives:this.game?.keepAlives||0,...diagnostics});
       this.close(new ConnectionError('INBOUND_TIMEOUT'));
     }
     return !!this.closed;

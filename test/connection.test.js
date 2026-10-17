@@ -5,7 +5,7 @@ import { once } from 'node:events';
 import { generateKeyPairSync, privateDecrypt, constants } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { MinecraftConnection } from '../src/connection.js';
-import { PacketCodec, Reader, concat, packet, string, i16, i32, shortBuffer } from '../src/codec.js';
+import { PacketCodec, Reader, concat, packet, string, i16, i32, shortBuffer, varint } from '../src/codec.js';
 import { aes, serverHash } from '../src/encryption.js';
 import { config } from '../src/config.js';
 const session={username:'MockPlayer',uuid:'00000000000000000000000000000001',accessToken:'FAKE_TEST_TOKEN'};
@@ -55,8 +55,8 @@ for (const injectProtocolFailure of [false,true]) test(injectProtocolFailure ?
       else if(id===6){movement=true;assert.ok(Math.abs(r.f64())<1e-8);assert.ok(Math.abs(r.f64()-64)<1e-8);}
       else if(id===1){assert.equal(r.str(),'/help');r.end();chatSent=true;}
       else if(id===14){
-        assert.equal(r.u8(),0);assert.equal(r.i16(),9);assert.equal(r.u8(),1);const action=r.i16();assert.equal(r.u8(),4);assert.equal(r.i16(),-1);r.end();dropped=true;
-        send(0x32,concat(Buffer.from([0]),i16(action),Buffer.from([1])));send(0x2f,concat(Buffer.from([0]),i16(9),i16(-1)));
+        assert.equal(r.u8(),0);const dropSlot=r.i16();assert.ok(dropSlot>=1&&dropSlot<=44);assert.equal(r.u8(),1);const action=r.i16();assert.equal(r.u8(),4);assert.equal(r.i16(),-1);r.end();dropped=true;
+        send(0x32,concat(Buffer.from([0]),i16(action),Buffer.from([1])));send(0x2f,concat(Buffer.from([0]),i16(dropSlot),i16(-1)));
       }
     })}catch(e){serverError=e;s.destroy()}});
   });
@@ -141,4 +141,23 @@ test('only incoming packets refresh the independent watchdog; outgoing writes do
   conn.send(3,Buffer.from([1]));assert.equal(conn.lastPacketAt,received);
   assert.equal(conn.checkInboundTimeout(received+conn.c.idleTimeout),true);
   assert.equal(conn.failure.code,'INBOUND_TIMEOUT');assert.equal(writes,2);
+});
+
+test('stall diagnostics distinguish a silent peer from an incomplete frame with TCP data still arriving',async t=>{
+ for(const trickle of [false,true]){
+  const events=[];let timer;
+  const c=await mock(t,s=>{
+   s.resume();s.write(concat(varint(10000),Buffer.from([0x21,1,2])));
+   if(trickle){timer=setInterval(()=>{if(!s.destroyed)s.write(Buffer.from([1]));},100);t.after(()=>clearInterval(timer));}
+  });
+  c.idleTimeout=1000;c.timeout=3000;
+  const conn=new MinecraftConnection(c,session,[],{event:(event,fields)=>events.push({event,...fields})});
+  conn.game={tick:()=>conn.send(3,Buffer.from([1])),inventory:{cancel(){}},keepAlives:0};
+  const result=await conn.start();clearInterval(timer);assert.equal(result.error.code,'INBOUND_TIMEOUT');
+  const diagnostic=events.find(event=>event.event==='inbound_stalled');
+  assert.equal(diagnostic.state,'WAITING_FRAME');assert.equal(diagnostic.pendingFrameBytes,10000);assert.equal(diagnostic.pendingPacketId,0x21);
+  assert.equal(diagnostic.socketPaused,false);assert.ok(diagnostic.inboundIdleMs>=1000);assert.ok(diagnostic.txBytes>0);
+  if(trickle){assert.ok(diagnostic.pendingFrameReceived>3);assert.ok(diagnostic.tcpIdleMs<500);}
+  else {assert.equal(diagnostic.pendingFrameReceived,3);assert.ok(diagnostic.tcpIdleMs>=900);}
+ }
 });

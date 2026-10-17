@@ -51,6 +51,14 @@ export class Reader {
 // Fixed upper bound; copies each byte once even when a frame arrives byte by byte.
 export class PacketCodec {
   constructor(max = 4 * 1024 * 1024) { this.max = max; this.header = []; this.body = null; this.used = 0; }
+  progress() {
+    let pendingPacketId=-1;
+    if(this.body&&this.used){
+      try { pendingPacketId=readVarint(this.body.subarray(0,this.used))?.value??-1; } catch {}
+    }
+    return {pendingFrameBytes:this.body?.length||0,pendingFrameReceived:this.used,
+      pendingHeaderBytes:this.header.length,pendingPacketId};
+  }
   feed(chunk, consume) {
     let p = 0;
     while (p < chunk.length) {

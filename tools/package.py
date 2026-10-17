@@ -5,7 +5,7 @@ from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 root = Path(__file__).resolve().parents[1]
 files = [root / name for name in (
     "README.md", "package.json", "package-lock.json", ".gitignore", ".gitattributes", ".env.example",
-    "session.example.json", "research/REPORT.md", "START-BOT.cmd", "start.sh", "install-ubuntu.sh",
+    "session.example.json", "research/REPORT.md", "START-BOT.cmd", "start.sh", "control.sh", "install-ubuntu.sh",
 )]
 for directory, patterns in {
     "src": ("*.js",), "test": ("*.test.js", "*.sh"),

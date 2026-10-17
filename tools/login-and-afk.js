@@ -8,9 +8,10 @@ import { Logger } from '../src/logger.js';
 import { ConsoleController } from '../src/console.js';
 import { credentialsPath, acquireAccount } from '../src/credentials.js';
 import { passwordConnector } from '../src/password-connection.js';
+import { ControlServer } from '../src/control-server.js';
 
 const stop = new AbortController(), log = new Logger();
-let consoleUI;
+let consoleUI, control;
 for (const signal of ['SIGINT','SIGTERM']) process.once(signal, () => stop.abort());
 async function prompt(label, hidden = false) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('INTERACTIVE_CONSOLE_REQUIRED');
@@ -55,11 +56,12 @@ try {
       c.authOrigin = credentials.authOrigin;
       console.log('Запуск AFK. Этот аккаунт должен быть закрыт в другом клиенте.');
       consoleUI = new ConsoleController({log,stop});
+      if(process.env.MC_CONTROL_SOCKET)control=await new ControlServer({path:process.env.MC_CONTROL_SOCKET,log,stop}).start();
       let terminal = false;
       const connect = passwordConnector({ credentials, initialSession, login:passwordLogin, signal:stop.signal, log,
         connect:async session => {
           const conn = new MinecraftConnection(c,session,mods,log);
-          consoleUI.setConnection(conn); return conn.start('afk',stop.signal);
+          consoleUI.setConnection(conn); control?.setConnection(conn); return conn.start('afk',stop.signal);
         } });
       process.exitCode = await reconnect(c, async () => {
         const result = await connect();
@@ -78,4 +80,4 @@ try {
     process.exitCode = e.code === 'CONFIG' || e.code?.startsWith('CREDENTIALS_') ||
       (e.code?.startsWith('LOGIN_') && !['LOGIN_NETWORK','LOGIN_TIMEOUT','LOGIN_SERVICE_ERROR'].includes(e.code)) ? 78 : 1;
   }
-} finally { consoleUI?.close(); }
+} finally { await control?.close();consoleUI?.close(); }

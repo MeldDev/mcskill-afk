@@ -10,19 +10,16 @@ const errors = {
   WINDOW_OPEN:'Открыто другое окно. Сброс инвентаря остановлен.',
   CURSOR_NOT_EMPTY:'На курсоре находится предмет. Сброс не выполняется.',
   DROP_BUSY:'Сброс уже выполняется. :cancel — остановить оставшиеся действия.',
-  INVENTORY_CHANGED:'Инвентарь изменился. Оставшиеся действия отменены; запросите новое подтверждение.',
-  DROP_REJECTED:'Сервер отклонил выбрасывание. Оставшиеся действия отменены.',
-  DROP_TIMEOUT:'Нет подтверждения выбрасывания от сервера. Оставшиеся действия отменены.',
   DROP_CANCELLED:'Оставшиеся действия сброса отменены.',
   CONFIRM_INVALID:'Нет действующего подтверждения с таким кодом. Используйте :dropall заново.'
 };
 export class ConsoleController {
-  constructor({log,stop,input=process.stdin,output=process.stdout,chatEnabled=process.env.MC_CHAT!=='0'}) {
-    Object.assign(this,{log,stop,input,output,chatEnabled});this.previousWrite=log.write;
+  constructor({log,stop,input=process.stdin,output=process.stdout,chatEnabled=process.env.MC_CHAT!=='0',captureLog=true}) {
+    Object.assign(this,{log,stop,input,output,chatEnabled,captureLog});this.previousWrite=log.write;
     this.handlers={chat:text=>{if(this.chatEnabled)this.writeLine(`[CHAT] ${safeConsoleText(text)}`)},
       ready:()=>this.writeLine('Бот в мире. Текст или /команда → Enter; :help — локальные команды.'),
       ended:()=>this.setConnection(null),inventory_status:status=>this.inventoryStatus(status)};
-    log.write=line=>this.writeLine(line);
+    if(captureLog)log.write=line=>this.writeLine(line);
     if(input.isTTY&&output.isTTY){
       this.rl=createInterface({input,output,terminal:true,historySize:0,prompt:'> '});
       this.rl.on('line',line=>{this.handleLine(line);this.rl?.prompt()});
@@ -69,30 +66,32 @@ export class ConsoleController {
         const plan=this.inventory().snapshot();this.confirmation=null;this.showSlots(plan);
         if(!plan.slots.length)return;
         const code=randomBytes(3).toString('hex').toUpperCase();
-        this.confirmation={code,plan,expires:Date.now()+30000};
-        this.writeLine(`Будут выброшены ${plan.slots.length} стаков из перечисленных слотов, ВКЛЮЧАЯ БРОНЮ и сетку крафта.`);
+        this.confirmation={code,expires:Date.now()+30000};
+        this.writeLine(`Будет выполнен сброс всего обычного инвентаря, ВКЛЮЧАЯ БРОНЮ и сетку крафта. Сейчас видно ${plan.slots.length} непустых слотов.`);
         this.writeLine('Вещи упадут рядом; их могут подобрать другие игроки. Сброс нельзя отменить после отправки.');
+        this.writeLine('После подтверждения — один проход по всем 44 обычным слотам, без сверки предметов и ожидания подтверждений слотов, с паузой 300 мс.');
         this.writeLine(`Для подтверждения в течение 30 секунд введите :confirm ${code}. :cancel — отмена.`);
       } else if(line.startsWith(':confirm ')){
         const pending=this.confirmation;
         if(!pending||Date.now()>pending.expires||line.slice(9).trim()!==pending.code)throw new Error('CONFIRM_INVALID');
-        this.confirmation=null;this.inventory().startDrop(pending.plan);
-      } else if(line.startsWith(':'))this.writeLine('Неизвестная локальная команда. :help — справка.');
+        this.confirmation=null;this.inventory().startDrop();
+      } else if(line.startsWith(':')){this.writeLine('Неизвестная локальная команда. :help — справка.');return false;}
       else {
         if(!this.connection)throw new Error('NOT_IN_WORLD');
         this.connection.sendChat(line);
       }
-    } catch(e){this.writeLine(errors[e.message]||'Действие не выполнено. Подключение и инвентарь проверьте через :help.');}
+      return true;
+    } catch(e){this.writeLine(errors[e.message]||'Действие не выполнено. Подключение и инвентарь проверьте через :help.');return false;}
   }
   inventoryStatus({code,count}) {
-    if(code==='DROP_STARTED')this.writeLine(`Начат подтверждённый сброс ${count} стаков, по одному с ожиданием сервера.`);
+    if(code==='DROP_STARTED')this.writeLine(`Начат проход по ${count} слотам: по одной команде сброса целого стака каждые 300 мс.`);
     else if(code==='DROP_COMPLETE'){
-      this.writeLine(`Подтверждён сброс ${count} стаков. Модовые слоты и содержимое рюкзаков не затрагивались.`);
+      this.writeLine(`Отправлены команды сброса для ${count} слотов. Выполнение каждой команды сервером не проверялось. Модовые слоты и содержимое рюкзаков не затрагивались.`);
       const remaining=this.connection?.game?.inventory.slots.slice(1).filter(Boolean).length||0;
       if(remaining)this.writeLine(`В инвентаре осталось/появилось ${remaining} непустых слотов. Автоматический повтор не выполняется.`);
-    } else this.writeLine(`${errors[code]||'Сброс остановлен.'} Подтверждено стаков: ${count}. Уже отправленное действие могло выполниться.`);
+    } else this.writeLine(`${errors[code]||'Сброс остановлен.'} Отправлено команд: ${count}. Уже отправленное действие могло выполниться.`);
   }
   close() {
-    this.setConnection(null);this.rl?.close();this.rl=null;this.log.write=this.previousWrite;this.closed=true;
+    this.setConnection(null);this.rl?.close();this.rl=null;if(this.captureLog)this.log.write=this.previousWrite;this.closed=true;
   }
 }

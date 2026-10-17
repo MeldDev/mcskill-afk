@@ -41,32 +41,46 @@ test('inventory tracks bounded metadata, includes armor/crafting and omits craft
 });
 test('NBT is skipped without decompression, including verified extended short format',()=>{
  const extra=Buffer.from([1,2,3]);const raw=concat(i16(1),Buffer.from([1]),i16(0),i16(32767),Buffer.alloc(32767),i32(extra.length),extra);
- const {inv}=inventory({9:raw},'mcskill');assert.equal(inv.slots[9].id,1);assert.equal(inv.slots[9].fingerprint.length,64);
+ const {inv}=inventory({9:raw},'mcskill');assert.equal(inv.slots[9].id,1);assert.deepEqual(inv.slots[9],{id:1,count:1,damage:0});
  assert.throws(()=>inv.handle(0x2f,slot(9,raw.subarray(0,-1))));
 });
-test('whole-stack drop waits for both accepted transaction and empty slot with a gap',()=>{
+test('whole-inventory sweep sends exactly one whole-stack click per slot without acknowledgements',()=>{
  const {inv,sent,statuses}=inventory({9:stack(1),36:stack(2,32)});
- inv.startDrop(inv.snapshot());assert.equal(sent.length,0);inv.tick(1000);assert.equal(sent.length,1);
- const [id,body]=sent[0], r=new Reader(body);assert.equal(id,14);assert.equal(r.u8(),0);assert.equal(r.i16(),9);assert.equal(r.u8(),1);const action=r.i16();assert.equal(r.u8(),4);assert.equal(r.i16(),-1);r.end();
- inv.handle(0x32,ack(action));inv.tick(1050);assert.equal(sent.length,1);
- inv.handle(0x2f,slot(9));inv.tick(1100);inv.tick(1399);assert.equal(sent.length,1);inv.tick(1400);assert.equal(sent.length,2);
- const second=new Reader(sent[1][1]);second.bytes(4);const secondAction=second.i16();
- inv.handle(0x2f,slot(36));inv.tick(1450);assert.ok(inv.drop.pending);
- inv.handle(0x32,ack(secondAction));inv.tick(1500);inv.tick(1550);
- assert.equal(inv.drop,null);assert.deepEqual(statuses.at(-1),{code:'DROP_COMPLETE',count:2});
+ inv.startDrop();assert.equal(sent.length,0);inv.tick(1000);assert.equal(sent.length,1);
+ const [id,body]=sent[0],r=new Reader(body);assert.equal(id,14);assert.equal(r.u8(),0);assert.equal(r.i16(),9);assert.equal(r.u8(),1);assert.equal(r.i16(),1);assert.equal(r.u8(),4);assert.equal(r.i16(),-1);r.end();
+ inv.tick(1299);assert.equal(sent.length,1);inv.tick(1300);assert.equal(sent.length,2);
+ for(let i=2;i<44;i++)inv.tick(1000+i*300);
+ assert.equal(inv.drop,null);assert.deepEqual(statuses.at(-1),{code:'DROP_COMPLETE',count:44});
+ const slots=sent.map(([id,body])=>{const r=new Reader(body);assert.equal(id,14);r.u8();return r.i16()});
+ assert.deepEqual(slots.slice(0,2),[9,36]);assert.equal(new Set(slots).size,44);
+ assert.deepEqual([...slots].sort((a,b)=>a-b),Array.from({length:44},(_,i)=>i+1));
+ inv.tick(100000);assert.equal(sent.length,44);
 });
-test('reject, timeout, changed inventory and cancellation stop future drop packets',()=>{
- for(const reason of ['reject','timeout','changed','cancel']){
-  const {inv,sent,statuses}=inventory({9:stack(),10:stack(2)});inv.startDrop(inv.snapshot());inv.tick(1000);
-  if(reason==='reject')inv.handle(0x32,ack(1,0));
-  if(reason==='timeout')inv.tick(6000);
-  if(reason==='changed')inv.handle(0x2f,slot(9,stack(3)));
+
+test('rejected transactions, missing updates and changed items do not abort or burst the sweep',()=>{
+ const {inv,sent,statuses}=inventory({9:stack(),10:stack(2)});inv.startDrop();inv.tick(1000);
+ inv.handle(0x32,ack(1,0));inv.handle(0x2f,slot(9,stack(3)));
+ inv.handle(0x2f,slot(10));inv.handle(0x2f,slot(15,stack(4)));
+ inv.tick(6000);assert.equal(sent.length,2);assert.ok(inv.drop);
+ inv.tick(6000);assert.equal(sent.length,2);
+ inv.handle(0x30,items({9:stack(3),15:stack(4)}));
+ for(let i=2;i<44;i++)inv.tick(6000+(i-1)*300);
+ assert.equal(sent.length,44);assert.equal(inv.drop,null);assert.equal(statuses.at(-1).code,'DROP_COMPLETE');
+});
+
+test('manual cancellation, reset, other window and occupied cursor stop subsequent clicks',()=>{
+ for(const reason of ['cancel','invalidate','window','cursor']){
+  const {inv,sent,statuses}=inventory();inv.startDrop();inv.tick(1000);
   if(reason==='cancel')inv.cancel();
-  inv.tick(7000);assert.equal(inv.drop,null);assert.equal(sent.length,1);assert.notEqual(statuses.at(-1).code,'DROP_COMPLETE');
+  if(reason==='invalidate')inv.invalidate();
+  if(reason==='window')inv.handle(0x2d,Buffer.from([1]));
+  if(reason==='cursor')inv.handle(0x2f,concat(Buffer.from([255]),i16(-1),stack()));
+  inv.tick(50000);assert.equal(inv.drop,null);assert.equal(sent.length,1);assert.notEqual(statuses.at(-1).code,'DROP_COMPLETE');
  }
 });
-test('unknown inventory, open container, nonempty cursor and stale confirmation cannot drop',()=>{
- const {inv,sent}=inventory();const plan=inv.snapshot();inv.handle(0x2f,slot(10,stack(2)));assert.throws(()=>inv.startDrop(plan),/INVENTORY_CHANGED/);
+
+test('inventory updates no longer invalidate a sweep; wrong window and cursor still prevent it',()=>{
+ const {inv,sent}=inventory();const plan=inv.snapshot();inv.handle(0x2f,slot(10,stack(2)));inv.startDrop(plan);assert.ok(inv.drop);inv.cancel();
  inv.handle(0x2f,concat(Buffer.from([255]),i16(-1),stack()));assert.throws(()=>inv.snapshot(),/CURSOR_NOT_EMPTY/);
  inv.handle(0x2d,Buffer.from([1]));assert.throws(()=>inv.snapshot(),/INVENTORY_NOT_READY/);inv.handle(0x2e,Buffer.from([1]));assert.throws(()=>inv.snapshot(),/INVENTORY_NOT_READY/);
  assert.equal(sent.length,0);
@@ -99,7 +113,7 @@ test('console output applies backpressure and restores its logger on close',()=>
 test('game handler emits chat and rejects/acknowledges inventory transactions correctly',()=>{
  const sent=[],chat=[];const g=new GameSessionHandler({send:(...a)=>sent.push(a),plugin(){},forge:{done:true},log:{event(){}},joined(){},positioned(){},chat:s=>chat.push(s)});
  g.handle(2,string('{"text":"hello"}'));assert.deepEqual(chat,['hello']);g.handle(0x30,items({9:stack()}));g.inventory.startDrop(g.inventory.snapshot());g.inventory.tick(1000);assert.equal(sent[0][0],14);g.handle(0x32,ack(1,0));
- assert.equal(g.inventory.drop,null);assert.equal(sent.at(-1)[0],15);assert.equal(sent.at(-1)[1][3],1);
+ assert.ok(g.inventory.drop);assert.equal(sent.at(-1)[0],15);assert.equal(sent.at(-1)[1][3],1);g.inventory.tick(1300);assert.equal(sent.at(-1)[0],14);
 });
 test('incoming chat and diagnostics preserve a partially typed console message',()=>{
  const input=new PassThrough(),output=new PassThrough(),stop=new AbortController();

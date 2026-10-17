@@ -1,5 +1,6 @@
 // Only internal event names and allowlisted scalar metrics reach stdout.
-const allowed = new Set(['code','state','attempt','delayMs','rssMiB','heapMiB','packets','keepAlives','mods','mappings','channels','bytes','durationMs','id','count','dimension']);
+const allowed = new Set(['code','state','attempt','delayMs','rssMiB','heapMiB','packets','keepAlives','mods','mappings','channels','bytes','durationMs','id','count','dimension',
+  'rxBytes','txBytes','pendingFrameBytes','pendingFrameReceived','pendingHeaderBytes','pendingPacketId','inboundIdleMs','tcpIdleMs','socketPaused','outboundBytes']);
 export class Logger {
   constructor(write = line => console.log(line)) { this.write = write; }
   event(event, fields = {}) {

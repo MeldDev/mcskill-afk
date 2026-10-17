@@ -32,6 +32,8 @@ copy_file "$node_source" /opt/mcskill-afk/runtime/node 0755
 for source_path in src/*.js; do copy_file "$source_path" "/opt/mcskill-afk/src/$(basename -- "$source_path")" 0644; done
 for source_path in profiles/*.json; do copy_file "$source_path" "/opt/mcskill-afk/profiles/$(basename -- "$source_path")" 0644; done
 copy_file tools/login-and-afk.js /opt/mcskill-afk/tools/login-and-afk.js 0644
+copy_file tools/control.js /opt/mcskill-afk/tools/control.js 0644
+copy_file control.sh /opt/mcskill-afk/control.sh 0755
 copy_file package.json /opt/mcskill-afk/package.json 0644
 copy_file package-lock.json /opt/mcskill-afk/package-lock.json 0644
 install -o root -g root -m 0644 deploy/mcskill-afk.service /etc/systemd/system/mcskill-afk.service

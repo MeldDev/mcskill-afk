@@ -11,6 +11,7 @@ Group=mcskill-afk
 WorkingDirectory=/opt/mcskill-afk
 Environment=MC_CREDENTIALS_FILE=/etc/mcskill-afk/credentials.json
 Environment=NODE_ENV=production
+Environment=MC_CONTROL_SOCKET=/run/mcskill-afk/control.sock
 EnvironmentFile=-/etc/mcskill-afk/config
 ExecStart=/opt/mcskill-afk/runtime/node --max-old-space-size=192 /opt/mcskill-afk/tools/login-and-afk.js --service
 # Network failures retry inside the app. Restart crashes; terminal auth/policy errors require attention.
@@ -25,6 +26,8 @@ CPUQuota=90%
 TasksMax=32
 LimitNOFILE=128
 UMask=0077
+RuntimeDirectory=mcskill-afk
+RuntimeDirectoryMode=0700
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

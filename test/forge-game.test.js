@@ -34,7 +34,7 @@ test('Join Game settings, rejected transaction confirmation and chunk discard', 
   g.handle(0x32,concat(Buffer.from([0]),i16(1),Buffer.from([0])));assert.equal(sent.at(-1)[0],15);
   g.handle(0x21,Buffer.alloc(1024));assert.equal(g.chunks,undefined);
   assert.throws(()=>g.handle(0,Buffer.alloc(1)));
-  assert.throws(()=>g.handle(-1,Buffer.alloc(0)),{code:'PROTOCOL'});
+  assert.doesNotThrow(()=>g.handle(-1,Buffer.alloc(0)));
 });
 
 test('opaque mod payload with overflowing length is discarded without losing the next KeepAlive frame', () => {
@@ -69,4 +69,22 @@ test('Forge handshake and channel registration still require valid inner lengths
   assert.deepEqual(payloads,[Buffer.from([255,3])]);
   g.handle(0x3f,concat(string('REGISTER'),i16(3),Buffer.from('a\0b')));
   assert.equal(g.channelCount,2);
+});
+
+
+test('all unhandled IDs are discarded without losing the next KeepAlive frame', () => {
+  for (const profile of ['mcskill', 'standard']) {
+    const sent=[];
+    const g=new GameSessionHandler({send:(...args)=>sent.push(args),plugin(){},forge:{profile},log,joined(){},positioned(){}});
+    const frames=[];
+    for (const id of [-2147483648, -27, -26, -25, -1, 0x41, 0x60, 300741, 2147483647]) {
+      for (const size of [0, 15, 16, 17]) frames.push(packet(id,Buffer.alloc(size,0xa5)));
+    }
+    frames.push(packet(0,i32(1710)));
+    const codec=new PacketCodec();
+    for (const byte of concat(...frames)) codec.feed(Buffer.from([byte]),frame=>{
+      const r=new Reader(frame); g.handle(r.vi(),r.bytes(r.remaining));
+    });
+    assert.equal(g.keepAlives,1); assert.deepEqual(sent,[[0,i32(1710)]]);
+  }
 });

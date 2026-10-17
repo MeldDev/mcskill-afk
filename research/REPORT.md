@@ -147,3 +147,15 @@ Read-only deploy/check-vps.sh теперь работает и при failed с�
 При protocol_error теперь выводится TCP/decoder progress и история до 16 границ, состоящая только из числовых ID/длин. Внутренние данные, токены и текст сообщений не сохраняются. Отрицательные ID также явно отвергаются, вместо прежнего молчаливого пропуска. Добавлен тест размера 9248/ID 300741 и отсутствия payload в метаданных. Для дальнейшего анализа требуются новые packet_boundary и, при зависании, inbound_stalled с VPS. Исправление причины десинхронизации не объявляется.
 
 ???????? ??????? ??????: 80 ?????? ??????, 3 Unix-???????? ????????? ?? Windows; ?????? ???.
+
+
+## CoFHCore UUID packet regression - 2026-10-17
+
+The repeated ID -26 / frame bytes 21 is a supported pack extension, not evidence of lost framing. Local CFR inspection of CoFHCore-[1.7.10]3.1.4-329-client.jar confirms SecurityHelper.setup() registers Login.S__PacketSendUUID under clientbound PLAY ID -26. The inner class reads/writes two longs (16 bytes), is sent on PlayerLoggedInEvent and only updates SecurityHelper.cachedId on the client. Five-byte signed VarInt ID plus 16 bytes exactly matches the reported frame size.
+
+Commit 10c8399 introduced the regression by rejecting all negative IDs; abb930d and its successors up to d31e302 discarded this extension implicitly. Add an explicit mcskill-only handler with exact body length validation. Keep rejection of every other unknown ID, including 300741: this finding does not explain that earlier failure. Regression coverage includes byte-fragmented framing followed by KeepAlive, invalid lengths, standard-profile rejection, and the extension in the encrypted TCP login test. No live account login is needed for these tests.
+
+
+## Unhandled packet policy update - 2026-10-17
+
+At the owner's request, discard all unhandled PLAY IDs in both profiles, including negative and large positive IDs. This supersedes the earlier CoFH-only handler and unknown-ID rejection policy. No arbitrary payload decoding or retention is added; outer frame bounds and validation of implemented packets remain unchanged. Regression tests cover signed ID extremes, arbitrary body lengths, fragmented frames followed by KeepAlive, and unknown IDs in an encrypted TCP session. Protocol-error tests now use malformed KeepAlive rather than unknown IDs.

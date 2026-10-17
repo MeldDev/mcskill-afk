@@ -65,8 +65,9 @@ export class GameSessionHandler {
         return;
       }
       default:
-        if (id < 0 || id > 0x40) throw new ProtocolError('Unknown protocol 5 packet ID');
-        // Chunks and entities are never decoded or retained.
+        // Ignore every unhandled ID, including signed and mod-specific IDs.
+        // The complete outer frame is already bounded and consumed.
+        return;
     }
   }
   sendPosition() {

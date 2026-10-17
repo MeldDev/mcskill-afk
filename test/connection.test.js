@@ -20,7 +20,7 @@ async function mock(t, handle) {
   return config({MC_HOST:'127.0.0.1',MC_PORT:String(server.address().port),MC_TIMEOUT_MS:'2000',MC_IDLE_TIMEOUT_MS:'2000',MC_TEST_DURATION_MS:'1000'});
 }
 for (const injectProtocolFailure of [false,true]) test(injectProtocolFailure ?
-  'unknown in-world packet closes encrypted TCP and permits a clean reconnect' :
+  'malformed known in-world packet closes encrypted TCP and permits a clean reconnect' :
   'end-to-end encrypted login, FML, Join Game, position and KeepAlive over real TCP',async t=>{
   const {publicKey,privateKey}=generateKeyPairSync('rsa',{modulusLength:1024});
   const der=publicKey.export({type:'spki',format:'der'}), verify=Buffer.from([1,2,3,4]);
@@ -50,11 +50,13 @@ for (const injectProtocolFailure of [false,true]) test(injectProtocolFailure ?
           send(1,concat(i32(1),Buffer.from([0,0,2,10]),string('flat'),i32(0)));
           send(0x30,concat(Buffer.from([0]),i16(45),...Array.from({length:45},(_,i)=>i===9?concat(i16(1),Buffer.from([64]),i16(0),i16(-1)):i16(-1))));
           send(2,string('{"translate":"chat.type.text","with":["Mock","hello"]}'));
-          const p=Buffer.alloc(33);p.writeDoubleBE(65.62,8);send(8,p);send(0,i32(909));
+          const p=Buffer.alloc(33);p.writeDoubleBE(65.62,8);send(8,p);
+          // CoFH sends this UUID extension on login, before regular world traffic.
+          send(-26,Buffer.alloc(16,0xa5));send(300741,Buffer.alloc(9245));send(0x60,Buffer.alloc(12299));send(0,i32(909));
           // Large unknown payload and chunk prove world data is bounded/discarded.
           send(0x21,Buffer.alloc(131072));
         }
-      } else if(id===0){assert.equal(r.i32(),909);r.end();keepAliveReply=true;if(injectProtocolFailure)send(0x60,Buffer.alloc(12299));}
+      } else if(id===0){assert.equal(r.i32(),909);r.end();keepAliveReply=true;if(injectProtocolFailure)send(0,Buffer.alloc(1));}
       else if(id===6){movement=true;assert.ok(Math.abs(r.f64())<1e-8);assert.ok(Math.abs(r.f64()-64)<1e-8);}
       else if(id===1){assert.equal(r.str(),'/help');r.end();chatSent=true;}
       else if(id===14){
@@ -170,11 +172,13 @@ test('protocol failure reports at most 16 packet boundaries without payloads or 
  conn.state='PLAY';conn.ready=true;
  conn.game=new GameSessionHandler({send(){},plugin(){},forge:{},log:{event(){}},joined(){},positioned(){}});
  for(let i=0;i<20;i++)conn.receive(concat(varint(0x21),Buffer.from('FAKE_PRIVATE_PAYLOAD')));
- try {conn.receive(concat(varint(300741),Buffer.alloc(9245)));assert.fail('unknown ID accepted');}
+ conn.receive(concat(varint(300741),Buffer.alloc(9245)));
+ try {conn.receive(concat(varint(0),Buffer.alloc(1)));assert.fail('malformed KeepAlive accepted');}
  catch(error){assert.ok(error instanceof ProtocolError);conn.close(error);}
  const history=lines.filter(event=>event.event==='packet_boundary');
- assert.equal(history.length,16);assert.equal(history.at(-1).id,300741);assert.equal(history.at(-1).bytes,9248);
- assert.equal(lines.find(event=>event.event==='protocol_error').id,300741);
+ assert.equal(history.length,16);assert.equal(history.at(-2).id,300741);assert.equal(history.at(-2).bytes,9248);
+ assert.equal(history.at(-1).id,0);assert.equal(history.at(-1).bytes,2);
+ assert.equal(lines.find(event=>event.event==='protocol_error').id,0);
  assert.equal(conn.failure.retryable,true);assert.ok(!JSON.stringify(lines).includes('FAKE_PRIVATE_PAYLOAD'));
  for(const event of history)assert.deepEqual(Object.keys(event).sort(),['bytes','count','event','id','time']);
 });

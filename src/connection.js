@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { performance } from 'node:perf_hooks';
 import { EventEmitter } from 'node:events';
 import { Reader, PacketCodec, ProtocolError, concat, packet, varint, string, shortBuffer } from './codec.js';
 import { encryptionResponse, serverHash, aes } from './encryption.js';
@@ -18,6 +19,7 @@ export class MinecraftConnection extends EventEmitter {
   }
   start(mode = 'afk', signal) {
     if (this.started) throw new Error('Connection already started'); this.started = true; this.mode = mode;
+    this.lastPacketAt = performance.now();
     return new Promise(resolve => {
       this.resolve = resolve;
       this.onAbort = () => this.close(new ConnectionError('STOPPED', false));
@@ -45,11 +47,22 @@ export class MinecraftConnection extends EventEmitter {
         this.send(0, string(this.session.username));
       });
       this.deadline = setTimeout(() => this.close(new ConnectionError('LOGIN_TIMEOUT')), this.c.timeout);
-      this.ticker = setInterval(() => { try { this.game?.tick(); } catch (e) { this.close(e); } }, 50);
+      this.ticker = setInterval(() => {
+        try { if (!this.checkInboundTimeout()) this.game?.tick(); }
+        catch (e) { this.close(e); }
+      }, 50);
       this.metrics = setInterval(() => {
         const m = process.memoryUsage(); this.log.event('metrics', { rssMiB: Math.round(m.rss / 1048576), heapMiB: Math.round(m.heapUsed / 1048576), packets: this.packets, keepAlives: this.game?.keepAlives || 0 });
       }, 60000);
     });
+  }
+  checkInboundTimeout(now = performance.now()) {
+    // net.Socket's inactivity timer is also renewed by outgoing writes.
+    // Only complete inbound packets prove that the server is still talking.
+    if (!this.closed && now - this.lastPacketAt >= this.c.idleTimeout) {
+      this.close(new ConnectionError('INBOUND_TIMEOUT'));
+    }
+    return !!this.closed;
   }
   send(id, body) {
     if (this.closed) return;
@@ -67,6 +80,7 @@ export class MinecraftConnection extends EventEmitter {
   receive(frame) {
     this.packets++;
     const r = new Reader(frame); const id = r.vi();
+    this.lastPacketAt = performance.now();
     this.lastId = id; this.lastSize = frame.length;
     if ((this.state === 'LOGIN' && id === 0) || (this.state === 'PLAY' && id === 0x40)) {
       // Parse for validity but don't log arbitrary server text, which can echo secrets.

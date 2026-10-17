@@ -115,3 +115,30 @@ test('network close is retryable; malformed packet does not crash process',async
   const c=await mock(t,s=>s.once('data',()=>s.end()));
   const result=await new MinecraftConnection(c,session,[],log).start();assert.equal(result.error.code,'REMOTE_CLOSED');assert.equal(result.error.retryable,true);
 });
+
+test('inbound watchdog closes a silent TCP peer despite continuous outgoing writes',async t=>{
+  let writes=0;
+  const c=await mock(t,s=>s.on('data',()=>writes++));
+  c.idleTimeout=1000;c.timeout=3000;
+  const conn=new MinecraftConnection(c,session,[],log);
+  // Exercise the active-session ticker and real socket without a live account.
+  conn.game={tick:()=>conn.send(3,Buffer.from([1])),inventory:{cancel(){}},keepAlives:0};
+  const result=await conn.start('afk');
+  assert.equal(result.error.code,'INBOUND_TIMEOUT');assert.equal(result.error.retryable,true);
+  assert.ok(writes>=5);assert.ok(conn.socket.destroyed);assert.ok(conn.finished);
+  assert.ok(conn.ticker._destroyed);assert.ok(conn.metrics._destroyed);
+});
+
+test('only incoming packets refresh the independent watchdog; outgoing writes do not',()=>{
+  const conn=new MinecraftConnection(config({}),session,[],log);let writes=0;
+  conn.socket={writableLength:0,write(){writes++},destroy(){}};
+  conn.state='PLAY';conn.game={handle(){},inventory:{cancel(){}}};
+  conn.lastPacketAt=0;
+  conn.send(3,Buffer.from([1]));assert.equal(conn.lastPacketAt,0);
+  conn.receive(concat(Buffer.from([0]),i32(12)));
+  const received=conn.lastPacketAt;
+  assert.equal(conn.checkInboundTimeout(received+conn.c.idleTimeout-1),false);
+  conn.send(3,Buffer.from([1]));assert.equal(conn.lastPacketAt,received);
+  assert.equal(conn.checkInboundTimeout(received+conn.c.idleTimeout),true);
+  assert.equal(conn.failure.code,'INBOUND_TIMEOUT');assert.equal(writes,2);
+});

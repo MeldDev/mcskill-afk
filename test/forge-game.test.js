@@ -34,6 +34,7 @@ test('Join Game settings, rejected transaction confirmation and chunk discard', 
   g.handle(0x32,concat(Buffer.from([0]),i16(1),Buffer.from([0])));assert.equal(sent.at(-1)[0],15);
   g.handle(0x21,Buffer.alloc(1024));assert.equal(g.chunks,undefined);
   assert.throws(()=>g.handle(0,Buffer.alloc(1)));
+  assert.throws(()=>g.handle(-1,Buffer.alloc(0)),{code:'PROTOCOL'});
 });
 
 test('opaque mod payload with overflowing length is discarded without losing the next KeepAlive frame', () => {

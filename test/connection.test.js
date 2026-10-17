@@ -8,6 +8,9 @@ import { MinecraftConnection } from '../src/connection.js';
 import { PacketCodec, Reader, concat, packet, string, i16, i32, shortBuffer, varint } from '../src/codec.js';
 import { aes, serverHash } from '../src/encryption.js';
 import { config } from '../src/config.js';
+import { ProtocolError } from '../src/codec.js';
+import { Logger } from '../src/logger.js';
+import { GameSessionHandler } from '../src/game.js';
 const session={username:'MockPlayer',uuid:'00000000000000000000000000000001',accessToken:'FAKE_TEST_TOKEN'};
 const log={event(){}};
 async function mock(t, handle) {
@@ -160,4 +163,18 @@ test('stall diagnostics distinguish a silent peer from an incomplete frame with 
   if(trickle){assert.ok(diagnostic.pendingFrameReceived>3);assert.ok(diagnostic.tcpIdleMs<500);}
   else {assert.equal(diagnostic.pendingFrameReceived,3);assert.ok(diagnostic.tcpIdleMs>=900);}
  }
+});
+
+test('protocol failure reports at most 16 packet boundaries without payloads or secrets',()=>{
+ const lines=[],conn=new MinecraftConnection(config({}),session,[],new Logger(line=>lines.push(JSON.parse(line))));
+ conn.state='PLAY';conn.ready=true;
+ conn.game=new GameSessionHandler({send(){},plugin(){},forge:{},log:{event(){}},joined(){},positioned(){}});
+ for(let i=0;i<20;i++)conn.receive(concat(varint(0x21),Buffer.from('FAKE_PRIVATE_PAYLOAD')));
+ try {conn.receive(concat(varint(300741),Buffer.alloc(9245)));assert.fail('unknown ID accepted');}
+ catch(error){assert.ok(error instanceof ProtocolError);conn.close(error);}
+ const history=lines.filter(event=>event.event==='packet_boundary');
+ assert.equal(history.length,16);assert.equal(history.at(-1).id,300741);assert.equal(history.at(-1).bytes,9248);
+ assert.equal(lines.find(event=>event.event==='protocol_error').id,300741);
+ assert.equal(conn.failure.retryable,true);assert.ok(!JSON.stringify(lines).includes('FAKE_PRIVATE_PAYLOAD'));
+ for(const event of history)assert.deepEqual(Object.keys(event).sort(),['bytes','count','event','id','time']);
 });

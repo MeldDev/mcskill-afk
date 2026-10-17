@@ -15,6 +15,7 @@ export class MinecraftConnection extends EventEmitter {
   constructor(c, session, mods, log, auth = new McSkillSessionService(c)) {
     super(); Object.assign(this, { c, session, mods, log, auth });
     this.state = 'LOGIN'; this.codec = new PacketCodec(c.maxPacket); this.packets = 0;
+    this.frameHistory=[];
     this.abort = new AbortController();
   }
   start(mode = 'afk', signal) {
@@ -93,6 +94,8 @@ export class MinecraftConnection extends EventEmitter {
     const r = new Reader(frame); const id = r.vi();
     this.lastPacketAt = performance.now();
     this.lastId = id; this.lastSize = frame.length;
+    this.frameHistory.push({id,bytes:frame.length});
+    if(this.frameHistory.length>16)this.frameHistory.shift();
     if ((this.state === 'LOGIN' && id === 0) || (this.state === 'PLAY' && id === 0x40)) {
       // Parse for validity but don't log arbitrary server text, which can echo secrets.
       const code = disconnectCode(r.str(),this.state); r.end(); this.log.event('server_disconnect', { state: this.state, code });
@@ -152,7 +155,9 @@ export class MinecraftConnection extends EventEmitter {
       // Reconnect from a clean TCP/cipher/framing state after an in-world
       // decoding failure. Never skip bytes or fabricate support for a packet.
       error.retryable = this.ready === true;
-      this.log.event('protocol_error', { state: error.message, id: this.lastId, bytes: this.lastSize });
+      this.log.event('protocol_error', { state: error.message, id: this.lastId, bytes: this.lastSize,...this.inboundDiagnostics() });
+      // Bounded metadata only: no packet contents, chat, access tokens or keys.
+      this.frameHistory.forEach((frame,index)=>this.log.event('packet_boundary',{count:index+1,...frame}));
     }
     this.closed = true; this.failure = error;
     this.abort.abort();

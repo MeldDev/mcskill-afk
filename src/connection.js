@@ -91,9 +91,25 @@ export class MinecraftConnection extends EventEmitter {
   }
   receive(frame) {
     this.packets++;
-    const r = new Reader(frame); const id = r.vi();
     this.lastPacketAt = performance.now();
-    this.lastId = id; this.lastSize = frame.length;
+    // Set frame metadata before decoding; an invalid ID must not report the
+    // previous packet's ID, size or receive time.
+    this.lastId = -1; this.lastSize = frame.length;
+    const r = new Reader(frame);
+    let id;
+    try { id = r.vi(); }
+    catch (error) {
+      if (!(error instanceof ProtocolError) || this.state !== 'PLAY') throw error;
+      // The outer frame is complete. Discard exactly this frame, without
+      // guessing an ID, scanning for a new boundary or touching cipher state.
+      this.frameHistory.push({id:-1,bytes:frame.length,state:'INVALID_PACKET_ID'});
+      if(this.frameHistory.length>16)this.frameHistory.shift();
+      this.ignoredPacketIds = (this.ignoredPacketIds || 0) + 1;
+      if(this.ignoredPacketIds === 1 || this.ignoredPacketIds % 1024 === 0)
+        this.log.event('packet_ignored',{state:'INVALID_PACKET_ID',bytes:frame.length,count:this.ignoredPacketIds});
+      return;
+    }
+    this.lastId = id;
     this.frameHistory.push({id,bytes:frame.length});
     if(this.frameHistory.length>16)this.frameHistory.shift();
     if ((this.state === 'LOGIN' && id === 0) || (this.state === 'PLAY' && id === 0x40)) {

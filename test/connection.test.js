@@ -28,7 +28,8 @@ for (const injectProtocolFailure of [false,true]) test(injectProtocolFailure ?
   const incomingChat=[];
   const c=await mock(t,s=>{
     const codec=new PacketCodec();let state='HANDSHAKE',crypto;
-    const send=(id,body)=>{const b=packet(id,body);s.write(crypto?crypto.encrypt.update(b):b)};
+    const sendFrame=body=>{const b=concat(varint(body.length),body);s.write(crypto?crypto.encrypt.update(b):b)};
+    const send=(id,body)=>sendFrame(concat(varint(id),body));
     const plugin=data=>send(63,concat(string('FML|HS'),shortBuffer(data)));
     const decrypt=b=>{const p=privateDecrypt({key:privateKey,padding:constants.RSA_NO_PADDING},b);return p.subarray(p.indexOf(0,2)+1)};
     s.on('data',b=>{try{codec.feed(crypto?crypto.decrypt.update(b):b,frame=>{
@@ -52,7 +53,12 @@ for (const injectProtocolFailure of [false,true]) test(injectProtocolFailure ?
           send(2,string('{"translate":"chat.type.text","with":["Mock","hello"]}'));
           const p=Buffer.alloc(33);p.writeDoubleBE(65.62,8);send(8,p);
           // CoFH sends this UUID extension on login, before regular world traffic.
-          send(-26,Buffer.alloc(16,0xa5));send(300741,Buffer.alloc(9245));send(0x60,Buffer.alloc(12299));send(0,i32(909));
+          send(-26,Buffer.alloc(16,0xa5));send(300741,Buffer.alloc(9245));
+          // Synthetic reproducer of the reported order and large frame size.
+          send(63,concat(string('ExampleMod'),Buffer.alloc(1404840)));
+          send(97,Buffer.alloc(108));send(111,Buffer.alloc(103));
+          sendFrame(concat(Buffer.from('ffffffff7f','hex'),Buffer.from('FAKE_PRIVATE_PAYLOAD')));
+          send(0x60,Buffer.alloc(12299));send(0,i32(909));
           // Large unknown payload and chunk prove world data is bounded/discarded.
           send(0x21,Buffer.alloc(131072));
         }
@@ -73,6 +79,7 @@ for (const injectProtocolFailure of [false,true]) test(injectProtocolFailure ?
   if(injectProtocolFailure){assert.equal(result.error.code,'PROTOCOL');assert.equal(result.error.retryable,true);assert.ok(conn.socket.destroyed);assert.ok(conn.finished);}
   else {assert.equal(result.error,undefined);assert.ok(result.reached);}
   assert.ok(result.ready);assert.ok(encrypted);assert.ok(keepAliveReply);assert.ok(movement);assert.equal(result.keepAlives,1);
+  assert.equal(conn.ignoredPacketIds,1);
   assert.deepEqual(incomingChat,['<Mock> hello']);assert.ok(chatSent);assert.ok(!conn.game.inventory.drop);
   if(!injectProtocolFailure){assert.ok(dropped);assert.equal(conn.game.inventory.slots[9],null);}
 });
@@ -181,4 +188,37 @@ test('protocol failure reports at most 16 packet boundaries without payloads or 
  assert.equal(lines.find(event=>event.event==='protocol_error').id,0);
  assert.equal(conn.failure.retryable,true);assert.ok(!JSON.stringify(lines).includes('FAKE_PRIVATE_PAYLOAD'));
  for(const event of history)assert.deepEqual(Object.keys(event).sort(),['bytes','count','event','id','time']);
+});
+
+
+test('invalid PLAY IDs discard only their frame, bound diagnostics and keep metadata current',()=>{
+ const lines=[],sent=[];
+ const conn=new MinecraftConnection(config({}),session,[],new Logger(line=>lines.push(JSON.parse(line))));
+ conn.state='PLAY';conn.ready=true;
+ conn.game=new GameSessionHandler({send:(...args)=>sent.push(args),plugin(){},forge:{},log,joined(){},positioned(){}});
+ conn.lastPacketAt=0;conn.lastId=111;conn.lastSize=104;
+ const malformed=[Buffer.from('ffffffff7f','hex'),Buffer.from('808080808080','hex'),Buffer.from([128])];
+ const codec=new PacketCodec();
+ const wire=concat(...malformed.map(body=>concat(varint(body.length),body)),packet(0,i32(909)));
+ for(const byte of wire)codec.feed(Buffer.from([byte]),frame=>conn.receive(frame));
+ assert.equal(conn.ignoredPacketIds,3);assert.equal(conn.game.keepAlives,1);
+ assert.deepEqual(sent,[[0,i32(909)]]);assert.ok(!conn.closed);assert.ok(conn.lastPacketAt>0);
+ assert.deepEqual(conn.frameHistory.slice(0,3),malformed.map(body=>({id:-1,bytes:body.length,state:'INVALID_PACKET_ID'})));
+ for(let i=0;i<1100;i++)conn.receive(concat(malformed[0],Buffer.from('FAKE_PRIVATE_PAYLOAD')));
+ assert.equal(conn.frameHistory.length,16);assert.equal(conn.ignoredPacketIds,1103);
+ assert.equal(lines.length,2);assert.ok(lines.every(line=>line.event==='packet_ignored'));
+ assert.deepEqual(lines.map(line=>line.count),[1,1024]);assert.ok(!JSON.stringify(lines).includes('FAKE_PRIVATE_PAYLOAD'));
+ assert.equal(conn.lastId,-1);assert.equal(conn.lastSize,25);
+});
+
+test('invalid login IDs remain fatal and report the current frame rather than stale metadata',()=>{
+ const lines=[],conn=new MinecraftConnection(config({}),session,[],new Logger(line=>lines.push(JSON.parse(line))));
+ conn.lastId=111;conn.lastSize=104;conn.lastPacketAt=0;
+ const frame=Buffer.from('ffffffff7f','hex');
+ assert.throws(()=>{try{conn.receive(frame)}catch(error){conn.close(error);throw error}},{code:'PROTOCOL'});
+ const event=lines.find(line=>line.event==='protocol_error');
+ assert.equal(event.id,-1);assert.equal(event.bytes,frame.length);assert.ok(conn.lastPacketAt>0);
+ assert.equal(conn.failure.retryable,false);assert.equal(conn.ignoredPacketIds,undefined);
+ // A broken outer length is not a complete discardable frame.
+ assert.throws(()=>new PacketCodec().feed(frame,()=>assert.fail('bad header accepted')),{code:'PROTOCOL'});
 });

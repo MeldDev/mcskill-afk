@@ -159,3 +159,10 @@ Commit 10c8399 introduced the regression by rejecting all negative IDs; abb930d 
 ## Unhandled packet policy update - 2026-10-17
 
 At the owner's request, discard all unhandled PLAY IDs in both profiles, including negative and large positive IDs. This supersedes the earlier CoFH-only handler and unknown-ID rejection policy. No arbitrary payload decoding or retention is added; outer frame bounds and validation of implemented packets remain unchanged. Regression tests cover signed ID extremes, arbitrary body lengths, fragmented frames followed by KeepAlive, and unknown IDs in an encrypted TCP session. Protocol-error tests now use malformed KeepAlive rather than unknown IDs.
+
+
+## VarInt overflow after a large opaque frame - 2026-10-17
+
+VPS log: after a 1404852-byte plugin frame, ID 97 / 109 bytes and ID 111 / 104 bytes, VarInt overflow is reported with no pending header/body and inboundIdleMs 224. receive() previously decoded the ID before updating metadata. Thus the reported ID/size/time may belong to the previous successful frame; an ID-decoding failure from a complete outer frame is consistent with this log. This does not establish why the stream contains these values or prove that framing is correct.
+
+The requested permissive PLAY policy now also discards a complete frame if its ID VarInt is invalid. Only the ID read is caught; handled-packet body errors, LOGIN errors and outer framing errors remain strict. No byte scanning or stream/cipher resets are attempted. Frame metadata is updated before ID decoding; skipped frames have INVALID_PACKET_ID in bounded history, with payload-free notifications at count 1 and each 1024. Synthetic tests reproduce the large-frame size and following sequence over encrypted TCP, then assert KeepAlive recovery. No live VPS or account connection was used.

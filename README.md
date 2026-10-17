@@ -244,3 +244,6 @@ npm test
 
 
 All unhandled PLAY packet IDs, including negative IDs such as CoFHCore `-26` and large mod-specific IDs, are discarded in both profiles. Their bodies are not parsed or retained. Frame limits and validation of handled packets remain active.
+
+
+In PLAY, a complete frame whose packet ID cannot be decoded is also discarded. A rate-limited `packet_ignored` event with `state: INVALID_PACKET_ID` reports only the frame size and cumulative count. LOGIN ID errors, invalid outer frame lengths and malformed handled packet bodies remain fatal. Discarding a complete frame does not repair or prove the correctness of server framing.

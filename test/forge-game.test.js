@@ -2,8 +2,42 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ForgeHandshakeHandler } from '../src/forge.js';
 import { GameSessionHandler } from '../src/game.js';
+import { config, modProvider } from '../src/config.js';
 import { Reader, PacketCodec, packet, concat, varint, string, i16, i32 } from '../src/codec.js';
 const log={event(){}};
+test('current pack sends Forge Starter configuration data before ModList', async () => {
+  const mods = await modProvider(config({}));
+  const sent=[];
+  const f=new ForgeHandshakeHandler({send:(...a)=>sent.push(a),mods,log,complete(){}});
+  f.handle(concat(Buffer.from([0,2]),i32(0)));
+  assert.deepEqual(sent.map(([channel])=>channel),['REGISTER','FML|HS','FML|HS','FML|HS']);
+  assert.deepEqual(sent[1][1],Buffer.from([1,2]));
+  const data=new Reader(sent[2][1]);
+  assert.equal(data.u8(),99);assert.equal(data.vi(2),2);
+  assert.equal(data.str(),'forgestartermod:game_data_snapshot');
+  assert.equal(data.vi(3),4);assert.equal(data.i32(),0);
+  assert.equal(data.str(),'metaconfig:config_versions');
+  assert.equal(data.vi(3),1);assert.equal(data.vi(3),0);data.end();
+  const list=new Reader(sent[3][1]);assert.equal(list.u8(),2);
+  const count=list.vi(2), advertised=new Map();
+  for(let i=0;i<count;i++)advertised.set(list.str(),list.str());list.end();
+  assert.equal(advertised.get('metablocks'),'2.0.1');
+  assert.equal(advertised.get('metaconfig'),'2.2.2');
+  assert.equal(advertised.get('metaui'),'1.7.25');
+  assert.equal(count,mods.length);
+  // A backend reset must send fresh uncached configuration data again.
+  f.done=true;f.handle(Buffer.from([254]));sent.length=0;
+  f.handle(concat(Buffer.from([0,2]),i32(0)));
+  assert.equal(sent[2][1][0],99);assert.equal(sent[3][1][0],2);
+});
+test('standard Forge does not send pack-specific data even with a Forge Starter mod entry', () => {
+  const sent=[];
+  const f=new ForgeHandshakeHandler({send:(_channel,data)=>sent.push(data),
+    mods:[{modid:'forgestartermod',version:'1.0.4'}],profile:'standard',log,complete(){}});
+  f.handle(Buffer.from([0,1]));
+  assert.equal(sent.length,3);assert.deepEqual(sent[1],Buffer.from([1,2]));
+  assert.equal(sent[2][0],2);
+});
 test('exact 1.7.10 MetaHandshakePatcher hello, registry, ack states and reset', () => {
   const sent=[];let complete=0;
   const f=new ForgeHandshakeHandler({send:(...a)=>sent.push(a),mods:[{modid:'FML',version:'7.99.40.1614'}],log,complete:()=>complete++});

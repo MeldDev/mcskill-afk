@@ -2,7 +2,9 @@ import { Reader, ProtocolError, concat, varint, string, i32 } from './codec.js';
 // FML 7 / protocol 5: discriminator 3 is ModIdData, NOT 1.8 RegistryData.
 export class ForgeHandshakeHandler {
   constructor({ send, mods, profile = 'mcskill', log, complete, resetting = () => {} }) {
-    Object.assign(this, { send, mods, profile, log, complete, resetting }); this.reset();
+    Object.assign(this, { send, mods, profile, log, complete, resetting });
+    this.forgeStarter = profile === 'mcskill' && mods.some(m => m.modid === 'forgestartermod');
+    this.reset();
   }
   reset() { this.state = 'HELLO'; this.done = false; }
   ack(n) { this.send('FML|HS', Buffer.from([255, n])); }
@@ -16,9 +18,17 @@ export class ForgeHandshakeHandler {
       const version = r.u8(); if (version !== 1 && version !== 2) throw new ProtocolError('Unsupported FML protocol');
       if (version > 1) this.dimension = r.i32(); r.end();
       this.send('REGISTER', Buffer.from('FML|HS\0FML'));
-      // Locally verified MetaHandshakePatcher: int snapshot hash precedes FML version.
-      // Zero means no cached registry; always request the full authoritative mapping.
-      this.send('FML|HS', concat(Buffer.from([1]), this.profile === 'mcskill' ? i32(0) : Buffer.alloc(0), Buffer.from([2])));
+      // Older packs put the snapshot hash inside ClientHello. Forge Starter
+      // replaces that patch with discriminator 99 immediately AFTER ClientHello
+      // and BEFORE ModList (the server checks configuration data at ModList).
+      this.send('FML|HS', concat(Buffer.from([1]), this.profile === 'mcskill' && !this.forgeStarter ? i32(0) : Buffer.alloc(0), Buffer.from([2])));
+      if (this.forgeStarter) {
+        // No cached registry or MetaConfig versions: request authoritative data.
+        // Encoding verified in the installed Forge Starter 1.0.4 / MetaConfig 2.2.2.
+        this.send('FML|HS', concat(Buffer.from([99]), varint(2),
+          string('forgestartermod:game_data_snapshot'), varint(4), i32(0),
+          string('metaconfig:config_versions'), varint(1), varint(0)));
+      }
       this.send('FML|HS', concat(Buffer.from([2]), varint(this.mods.length), ...this.mods.flatMap(m => [string(m.modid), string(m.version)])));
       this.state = 'MODLIST';
     } else if (this.state === 'MODLIST' && type === 2) {

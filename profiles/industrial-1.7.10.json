@@ -429,7 +429,7 @@
   },
   {
     "modid": "metaui",
-    "version": "1.7.12"
+    "version": "1.7.25"
   },
   {
     "modid": "metastartmod",
@@ -694,5 +694,29 @@
   {
     "modid": "MineFactoryReloaded|CompatTwilightForest",
     "version": "1.7.10R2.8.2B1"
+  },
+  {
+    "modid": "metablocks",
+    "version": "2.0.1"
+  },
+  {
+    "modid": "metaconfig",
+    "version": "2.2.2"
+  },
+  {
+    "modid": "metaevent",
+    "version": "1.0.0"
+  },
+  {
+    "modid": "forgestartermod",
+    "version": "1.0.4"
+  },
+  {
+    "modid": "metaguidescreenshot",
+    "version": "1.0.0"
+  },
+  {
+    "modid": "metaskins",
+    "version": "1.0.0"
   }
 ]

@@ -42,9 +42,9 @@ node tools/import-session.js 'C:\path\mc-launch-example.args' session.json
 
 `probe` использует login handshake, поскольку нестандартный Status этого сервера не является надёжной проверкой. Каждый тест делает одну попытку. Коды завершения: 0 — успех/запрошенная остановка, 1 — ошибка. Для длительной проверки задайте `MC_TEST_DURATION_MS=600000` (10 минут).
 
-Не запускайте циклы probe/auth/forge-test. В AFK по умолчанию после обрыва сети или неудачного подключения клиент ждёт **60 секунд** и повторяет вход **без ограничения числа попыток**. Это действует и для `START-BOT.cmd`. Следующая пауза отсчитывается после завершения неудачной попытки, поэтому время самого подключения добавляется к минуте ожидания. При успешном входе клиент остаётся в мире и больше не переподключается, пока соединение не оборвётся.
+Не запускайте циклы probe/auth/forge-test. В AFK по умолчанию после обрыва клиент повторяет вход **без ограничения числа попыток**. Если TCP-соединение с игровым сервером установить не удалось (отказ порта, ошибка DNS/маршрута, таймаут подключения), пауза составляет **5 минут** (`MC_UNAVAILABLE_INTERVAL_MS=300000`). Недоступность API входа с паролем тоже повторяется через 5 минут. Если TCP-соединение устанавливается, действует прежняя пауза **60 секунд** либо выбранный `backoff`, включая ответы прокси при выключенном игровом backend. Это действует и для `START-BOT.cmd`, и для systemd. Пауза отсчитывается после завершения неудачной попытки; время самой попытки добавляется к ней. Ctrl+C/SIGTERM прерывает ожидание. При успешном входе клиент остаётся в мире до обрыва соединения.
 
-Распознаются серверные сообщения о рестарте, технических работах, заполненном или недоступном сервере, в том числе во время Login. **Неизвестный отказ во время `LOGIN` тоже повторяется через минуту:** прокси может принимать TCP и Encryption Request, пока игровой сервер ещё выключен, а затем возвращать общее отключение. В логе такой случай обозначается `SERVER_LOGIN_RETRY`; он не означает неверный пароль. Неизвестный кик уже из `PLAY`, явный отказ авторизации/недействительная сессия, ошибка протокола до готовности мира, AFK-kick и бан останавливают клиент. При запуске через tools/login-and-afk.js истёкшая сессия обновляется через штатный вход с сохранённым паролем; в режиме --session её нужно обновить вручную. После `world_ready` ошибка декодирования пакетов закрывает текущее соединение и повторяет вход через минуту с новым TCP/AES. Unhandled packet IDs are discarded as complete frames. Ctrl+C/SIGTERM немедленно прерывает и минутное ожидание. При необходимости доступны ограничение попыток и прежний режим `MC_RECONNECT_MODE=backoff` с jitter; по умолчанию jitter не применяется.
+Распознаются серверные сообщения о рестарте, технических работах, заполненном или недоступном сервере, в том числе во время Login. Неизвестные отказы во время `LOGIN` и `PLAY` повторяются через минуту: прокси может принимать соединения, пока игровой сервер ещё выключен. Ошибки протокола на любой стадии закрывают текущее соединение и повторяют вход с новым TCP/AES. При запуске через `tools/login-and-afk.js` отклонённая или истёкшая сессия обновляется через штатный вход с сохранённым паролем без ограничения числа обновлений; в режиме `--session` истёкшую сессию нужно заменить вручную. Явный бан, AFK-kick, неверный пароль и запрос дополнительного подтверждения останавливают клиент. Ctrl+C/SIGTERM немедленно прерывает ожидание. Попытки подключения не ограничиваются по времени или количеству, включая старые настройки `MC_MAX_RETRIES`. Доступен режим `MC_RECONNECT_MODE=backoff` с jitter; по умолчанию используется фиксированный интервал.
 
 ## Чат и ручное управление
 
@@ -88,8 +88,9 @@ node tools/import-session.js 'C:\path\mc-launch-example.args' session.json
 | `MC_TEST_DURATION_MS` | `30000`, время после входа для forge-test |
 | `MC_RECONNECT_MODE` | `fixed`; также доступен `backoff` |
 | `MC_RECONNECT_INTERVAL_MS` | `60000`, пауза в режиме `fixed` |
+| `MC_UNAVAILABLE_INTERVAL_MS` | `300000`, пауза при недоступном TCP или API входа с паролем; также применяется в режиме `backoff` |
 | `MC_RECONNECT_BASE_MS`, `MC_RECONNECT_MAX_MS` | `15000`, `300000`, только для `backoff` |
-| `MC_MAX_RETRIES` | `-1` — без лимита; 0 — без повторов; положительное число — лимит |
+| `MC_MAX_RETRIES` | Устарело, игнорируется: попытки подключения всегда без лимита |
 | `MC_STABLE_MS` | `300000` |
 | `MC_MAX_PACKET_BYTES` | `4194304`, не больше 16 MiB |
 | `MC_CHAT` | `1`, вывод чата; `0` — отключить |
@@ -135,6 +136,20 @@ sudo systemctl enable --now mcskill-afk
 sudo journalctl -u mcskill-afk -f
 ```
 
+Если `git pull` уже выполнен на новой VPS, из каталога с `package.json` выполните `bash install-ubuntu.sh`, затем `./start.sh --setup` (ответьте `Y`), `bash install-ubuntu.sh --service` и `sudo systemctl enable --now mcskill-afk`. Первый установщик поставит все системные зависимости, приватный Node.js и выполнит тесты. Отдельно устанавливать Java или npm-пакеты вручную не требуется: внешних runtime npm-зависимостей сейчас нет.
+
+После последующих обновлений кода:
+
+```bash
+sudo systemctl stop mcskill-afk
+git pull
+bash install-ubuntu.sh --service
+sudo systemctl enable --now mcskill-afk
+sudo systemctl status mcskill-afk --no-pager
+```
+
+Сервис запускает копию приложения из `/opt/mcskill-afk`: одного `git pull` и `systemctl restart` недостаточно для обновления этой копии.
+
 Установщик создаёт отдельного системного пользователя, копирует приложение и Node.js в `/opt/mcskill-afk`, сохранённые данные — в `/etc/mcskill-afk/credentials.json` с владельцем `mcskill-afk` и правами `0600`. Для обычного пользователя путь исходного файла передаётся через sudo без пароля в аргументах. После SSH-разрыва бот продолжает работу; после перезагрузки VPS стартует сам. Не запускайте параллельно тот же аккаунт в tmux. Ручные команды работающему сервису передаются через отдельный `control.sh`.
 
 ## Управление работающим systemd-ботом
@@ -177,7 +192,7 @@ sudoedit /etc/mcskill-afk/config
 sudo systemctl restart mcskill-afk
 ```
 
-Unit: отдельный системный пользователь, read-only системные каталоги, `MemoryHigh=256M`, `MemoryMax=300M`, JS heap 192 MiB, `CPUQuota=90%`, максимум 32 задачи и 128 файловых дескрипторов. Приложение повторяет сетевые подключения каждую минуту без лимита; ошибки сети при авторизации тоже повторяются. При `AUTH_REJECTED` или явном истечении сессии бот один раз получает новую сессию через штатный API и переподключается через минуту. Повторный отказ свежей сессии, неверный пароль, MFA/2FA, бан и AFK-kick требуют вмешательства и завершают процесс с кодом `78`. systemd перезапускает аварийно завершившийся процесс через 60 секунд (`Restart=on-failure`), но код `78` исключён через `RestartPreventExitStatus`. Ручная остановка сервиса остаётся остановкой. Отсутствие лимита попыток не гарантирует непрерывность при недоступности MCSkill или ручной проверке аккаунта.
+Unit: отдельный системный пользователь, read-only системные каталоги, `MemoryHigh=256M`, `MemoryMax=300M`, JS heap 192 MiB, `CPUQuota=90%`, максимум 32 задачи и 128 файловых дескрипторов. Приложение повторяет подключения без ограничения по времени и числу попыток: при недоступном TCP или API входа с паролем — каждые 5 минут, при установленном TCP — по умолчанию раз в минуту. Старые значения `MC_MAX_RETRIES` игнорируются. Неизвестные отключения, временный whitelist, оставшийся на сервере вход и ошибки протокола на любой стадии закрывают текущее соединение и запускают новую попытку. При `AUTH_REJECTED`, отказе проверки имени или истечении сессии бот получает новую сессию через штатный API; повторное отклонение свежей сессии также повторяется без лимита. Неверный пароль, MFA/2FA, явный бан и AFK-kick завершают процесс с кодом `78`. systemd перезапускает аварийно завершившийся процесс через 60 секунд (`Restart=on-failure`), но код `78` исключён через `RestartPreventExitStatus`. Ручная остановка сервиса остаётся остановкой.
 
 ```bash
 sudo sh deploy/check-vps.sh
@@ -246,4 +261,4 @@ npm test
 All unhandled PLAY packet IDs, including negative IDs such as CoFHCore `-26` and large mod-specific IDs, are discarded in both profiles. Their bodies are not parsed or retained. Frame limits and validation of handled packets remain active.
 
 
-In PLAY, a complete frame whose packet ID cannot be decoded is also discarded. A rate-limited `packet_ignored` event with `state: INVALID_PACKET_ID` reports only the frame size and cumulative count. LOGIN ID errors, invalid outer frame lengths and malformed handled packet bodies remain fatal. Discarding a complete frame does not repair or prove the correctness of server framing.
+In PLAY, a complete frame whose packet ID cannot be decoded is also discarded. A rate-limited `packet_ignored` event with `state: INVALID_PACKET_ID` reports only the frame size and cumulative count. LOGIN ID errors, invalid outer frame lengths and malformed handled packet bodies close the current connection and schedule a fresh attempt. Discarding a complete frame does not repair or prove the correctness of server framing.

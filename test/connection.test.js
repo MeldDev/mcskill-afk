@@ -13,12 +13,58 @@ import { Logger } from '../src/logger.js';
 import { GameSessionHandler } from '../src/game.js';
 const session={username:'MockPlayer',uuid:'00000000000000000000000000000001',accessToken:'FAKE_TEST_TOKEN'};
 const log={event(){}};
+test('refused TCP connection is offline and retries after five minutes until TCP returns',async t=>{
+ const {reconnect}=await import('../src/reconnect.js');
+ const sockets=new Set();
+ const server=net.createServer(s=>{sockets.add(s);s.on('close',()=>sockets.delete(s));s.on('error',()=>{});s.resume();s.end(packet(0, string('Disconnected')));});
+ server.listen(0,'127.0.0.1');await once(server,'listening');
+ const port=server.address().port;
+ await new Promise(resolve=>server.close(resolve));
+ t.after(()=>{for(const s of sockets)s.destroy();return new Promise(resolve=>server.close(resolve));});
+ const c=config({MC_HOST:'127.0.0.1',MC_PORT:String(port)}),delays=[];
+ let attempts=0;
+ const stop=new AbortController();
+ const code=await reconnect(c,async()=>{
+  attempts++;
+  const result=await new MinecraftConnection(c,session,[],log).start('probe',stop.signal);
+  assert.equal(result.serverUnavailable,attempts===1);
+  return result;
+ },log,stop.signal,async ms=>{
+  delays.push(ms);
+  if(delays.length===1){server.listen(port,'127.0.0.1');await once(server,'listening');}
+  else stop.abort();
+ });
+ assert.equal(code,0);assert.equal(attempts,2);assert.deepEqual(delays,[300000,60000]);
+});
 async function mock(t, handle) {
   const sockets=new Set(); const server=net.createServer(s=>{sockets.add(s);s.on('close',()=>sockets.delete(s));s.on('error',()=>{});handle(s)});
   server.listen(0,'127.0.0.1');await once(server,'listening');
   t.after(async()=>{for(const s of sockets)s.destroy();await new Promise(r=>server.close(r));});
   return config({MC_HOST:'127.0.0.1',MC_PORT:String(server.address().port),MC_TIMEOUT_MS:'2000',MC_IDLE_TIMEOUT_MS:'2000',MC_TEST_DURATION_MS:'1000'});
 }
+test('more than a day offline, malformed login replies, then TCP login recovery',async t=>{
+ const {reconnect}=await import('../src/reconnect.js');
+ let accepted=0;
+ const c=await mock(t,s=>s.once('data',()=>{
+  accepted++;
+  if(accepted<=3)s.end(packet(2,concat(string(session.uuid),string(session.username))));
+  else s.write(packet(1,concat(string(''),shortBuffer(Buffer.from([1])),shortBuffer(Buffer.from([1])))));
+ }));
+ // Release the port to produce genuine ECONNREFUSED rather than canned results.
+ const port=c.port;
+ // mock owns the final server cleanup; use a separate initially closed port.
+ const reservation=net.createServer();reservation.listen(0,'127.0.0.1');await once(reservation,'listening');
+ const offlinePort=reservation.address().port;
+ await new Promise(resolve=>reservation.close(resolve));
+ const stop=new AbortController(),delays=[];let attempts=0;
+ const code=await reconnect(c,()=>{
+  attempts++;
+  return new MinecraftConnection({...c,port:attempts<=300?offlinePort:port},session,[],log).start('probe',stop.signal);
+ },log,stop.signal,async ms=>{delays.push(ms)});
+ assert.equal(code,0);assert.equal(attempts,304);assert.equal(accepted,4);
+ assert.deepEqual(delays,[...Array(300).fill(300000),...Array(3).fill(60000)]);
+ assert.ok(delays.reduce((a,b)=>a+b,0)>86400000);
+});
 for (const injectProtocolFailure of [false,true]) test(injectProtocolFailure ?
   'malformed known in-world packet closes encrypted TCP and permits a clean reconnect' :
   'end-to-end encrypted login, FML, Join Game, position and KeepAlive over real TCP',async t=>{
@@ -93,7 +139,7 @@ test('server restart Disconnect is retryable over actual TCP',async t=>{
 });
 test('Login Success before encryption is rejected',async t=>{
   const c=await mock(t,s=>s.once('data',()=>s.write(packet(2,concat(string(session.uuid),string(session.username))))));
-  const result=await new MinecraftConnection(c,session,[],log).start('auth-test');assert.equal(result.error.code,'PROTOCOL');assert.equal(result.error.retryable,false);
+  const result=await new MinecraftConnection(c,session,[],log).start('auth-test');assert.equal(result.error.code,'PROTOCOL');assert.equal(result.error.retryable,true);
 });
 test('abort closes an active TCP socket and clears timers',async t=>{
   let sock, accepted;const ready=new Promise(r=>{accepted=r});
@@ -211,14 +257,14 @@ test('invalid PLAY IDs discard only their frame, bound diagnostics and keep meta
  assert.equal(conn.lastId,-1);assert.equal(conn.lastSize,25);
 });
 
-test('invalid login IDs remain fatal and report the current frame rather than stale metadata',()=>{
+test('invalid login IDs close the connection and allow retry and report the current frame rather than stale metadata',()=>{
  const lines=[],conn=new MinecraftConnection(config({}),session,[],new Logger(line=>lines.push(JSON.parse(line))));
  conn.lastId=111;conn.lastSize=104;conn.lastPacketAt=0;
  const frame=Buffer.from('ffffffff7f','hex');
  assert.throws(()=>{try{conn.receive(frame)}catch(error){conn.close(error);throw error}},{code:'PROTOCOL'});
  const event=lines.find(line=>line.event==='protocol_error');
  assert.equal(event.id,-1);assert.equal(event.bytes,frame.length);assert.ok(conn.lastPacketAt>0);
- assert.equal(conn.failure.retryable,false);assert.equal(conn.ignoredPacketIds,undefined);
+ assert.equal(conn.failure.retryable,true);assert.equal(conn.ignoredPacketIds,undefined);
  // A broken outer length is not a complete discardable frame.
  assert.throws(()=>new PacketCodec().feed(frame,()=>assert.fail('bad header accepted')),{code:'PROTOCOL'});
 });

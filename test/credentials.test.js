@@ -58,15 +58,15 @@ test('Y saves only after accepted login, N does not save; password prompt is hid
   await assert.rejects(acquireAccount({authOrigin:account.authOrigin,load:async()=>null,prompt:async()=>answers.shift(),
     login:async()=>{throw Object.assign(new Error('LOGIN_REJECTED'),{code:'LOGIN_REJECTED'})},save:()=>assert.fail('saved invalid credentials')}),{code:'LOGIN_REJECTED'});
 });
-test('password connection retries auth downtime and refreshes expired session once at minute intervals', async () => {
+test('password connection retries auth downtime in five minutes and session refresh in one minute', async () => {
   let logins=0,connections=0;const delays=[];
   const connect=passwordConnector({credentials:account,signal:new AbortController().signal,log,
     login:async()=>{if(++logins===1)throw Object.assign(new Error('LOGIN_NETWORK'),{code:'LOGIN_NETWORK'});return session},
     connect:async()=>++connections===1?{error:{code:'AUTH_REJECTED',retryable:false}}:{ready:true} });
   assert.equal(await reconnect(config({}),connect,log,new AbortController().signal,async ms=>delays.push(ms)),0);
-  assert.equal(logins,3);assert.deepEqual(delays,[60000,60000]);
+  assert.equal(logins,3);assert.deepEqual(delays,[300000,60000]);
 });
-test('rejected credentials, 2FA, bans and repeated rejected fresh session stop without loops', async () => {
+test('rejected credentials, 2FA and bans stop; fresh session rejection keeps retrying', async () => {
   for(const code of ['LOGIN_REJECTED','LOGIN_MFA_REQUIRED','LOGIN_TOTP_REQUIRED']) {
     const connect=passwordConnector({credentials:account,log,login:async()=>{throw Object.assign(new Error(code),{code})}});
     assert.equal((await connect()).error.retryable,false);
@@ -74,7 +74,21 @@ test('rejected credentials, 2FA, bans and repeated rejected fresh session stop w
   let logins=0;
   const connect=passwordConnector({credentials:account,log,login:async()=>{logins++;return session},connect:async()=>({error:{code:'SERVER_SESSION_EXPIRED',retryable:false}})});
   assert.equal((await connect()).error.retryable,true);
-  assert.equal((await connect()).error.retryable,false);assert.equal(logins,2);
+  assert.equal((await connect()).error.retryable,true);assert.equal(logins,2);
   const banned=passwordConnector({credentials:account,initialSession:session,log,login:()=>assert.fail('unneeded login'),connect:async()=>({error:{code:'SERVER_DISCONNECT',retryable:false}})});
   assert.equal((await banned()).error.retryable,false);
+});
+
+test('hundreds of rejected fresh sessions and launcher downtime recover without stopping',async()=>{
+ let logins=0,connections=0;const delays=[];
+ const connect=passwordConnector({credentials:account,log,
+  login:async()=>{
+   if(++logins===100)throw Object.assign(new Error('LOGIN_SERVICE_ERROR'),{code:'LOGIN_SERVICE_ERROR'});
+   return {...session,accessToken:`FAKE_TOKEN_${logins}`};
+  },
+  connect:async()=>++connections<=400?{error:{code:connections%2?'AUTH_REJECTED':'SERVER_SESSION_EXPIRED',retryable:false}}:{ready:true}
+ });
+ assert.equal(await reconnect(config({MC_MAX_RETRIES:'2'}),connect,log,new AbortController().signal,async ms=>delays.push(ms)),0);
+ assert.equal(connections,401);assert.equal(logins,402);
+ assert.equal(delays.length,401);assert.equal(delays.filter(ms=>ms===300000).length,1);
 });

@@ -44,6 +44,7 @@ export class MinecraftConnection extends EventEmitter {
         } catch (e) { this.close(e); }
       });
       this.socket.once('connect', () => {
+        this.tcpConnected = true;
         this.log.event('tcp_connected');
         const port = Buffer.alloc(2); port.writeUInt16BE(this.c.port);
         this.send(0, concat(varint(5), string(this.c.host + '\0FML\0'), port, varint(2)));
@@ -115,7 +116,7 @@ export class MinecraftConnection extends EventEmitter {
     if ((this.state === 'LOGIN' && id === 0) || (this.state === 'PLAY' && id === 0x40)) {
       // Parse for validity but don't log arbitrary server text, which can echo secrets.
       const code = disconnectCode(r.str(),this.state); r.end(); this.log.event('server_disconnect', { state: this.state, code });
-      throw new ConnectionError(code, !['SERVER_DISCONNECT','SERVER_SESSION_EXPIRED'].includes(code));
+      throw new ConnectionError(code, code !== 'SERVER_DISCONNECT');
     }
     if (this.state === 'LOGIN') {
       if (id === 1) {
@@ -168,9 +169,9 @@ export class MinecraftConnection extends EventEmitter {
   close(error) {
     if (this.closed) return;
     if (error instanceof ProtocolError) {
-      // Reconnect from a clean TCP/cipher/framing state after an in-world
-      // decoding failure. Never skip bytes or fabricate support for a packet.
-      error.retryable = this.ready === true;
+      // Retry from a clean TCP/cipher/framing state after a decoding failure
+      // at any stage. A proxy can send bad replies while its backend restarts.
+      error.retryable = true;
       this.log.event('protocol_error', { state: error.message, id: this.lastId, bytes: this.lastSize,...this.inboundDiagnostics() });
       // Bounded metadata only: no packet contents, chat, access tokens or keys.
       this.frameHistory.forEach((frame,index)=>this.log.event('packet_boundary',{count:index+1,...frame}));
@@ -185,6 +186,7 @@ export class MinecraftConnection extends EventEmitter {
     clearTimeout(this.deadline); clearTimeout(this.testTimer); clearInterval(this.ticker); clearInterval(this.metrics);
     this.abort.abort(); this.outerSignal?.removeEventListener('abort', this.onAbort);
     this.game?.inventory.cancel('DROP_CANCELLED');this.emit('ended');
-    this.resolve?.({ error, reached: !!this.reached, ready: !!this.ready, stableMs: this.readyAt ? Date.now() - this.readyAt : 0, packets: this.packets, keepAlives: this.game?.keepAlives || 0 });
+    const serverUnavailable = !this.tcpConnected && ['NETWORK', 'LOGIN_TIMEOUT', 'IDLE_TIMEOUT', 'INBOUND_TIMEOUT'].includes(error?.code);
+    this.resolve?.({ error, serverUnavailable, reached: !!this.reached, ready: !!this.ready, stableMs: this.readyAt ? Date.now() - this.readyAt : 0, packets: this.packets, keepAlives: this.game?.keepAlives || 0 });
   }
 }

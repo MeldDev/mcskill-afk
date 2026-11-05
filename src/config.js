@@ -24,9 +24,11 @@ export function config(e = process.env) {
     testDuration: number(e, 'MC_TEST_DURATION_MS', 30000, 1000, 3600000),
     reconnectMode,
     reconnectInterval: number(e, 'MC_RECONNECT_INTERVAL_MS', 60000, 1000, 86400000),
+    unavailableInterval: number(e, 'MC_UNAVAILABLE_INTERVAL_MS', 300000, 1000, 86400000),
     reconnectBase: number(e, 'MC_RECONNECT_BASE_MS', 15000, 1000, 3600000),
     reconnectMax: number(e, 'MC_RECONNECT_MAX_MS', 300000, 1000, 86400000),
-    maxAttempts: number(e, 'MC_MAX_RETRIES', -1, -1, 10000),
+    // Long maintenance must never exhaust a retry budget, including old .env files.
+    maxAttempts: -1,
     stableMs: number(e, 'MC_STABLE_MS', 300000, 1000, 86400000),
     maxPacket: number(e, 'MC_MAX_PACKET_BYTES', 4194304, 32768, 16777216)
   };
